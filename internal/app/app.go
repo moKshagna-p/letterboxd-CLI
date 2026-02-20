@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -469,7 +470,7 @@ func parseOptionalRating(v string) (*float64, error) {
 }
 
 func printHeatmap(hm domain.HeatmapMatrix) {
-	weeks := hm.Weeks
+	weeks := orderWeeksChronologically(hm.Weeks)
 	if len(weeks) == 0 {
 		fmt.Println("No heatmap data.")
 		return
@@ -478,18 +479,11 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 	monthHeader := buildMonthHeader(weeks)
 	const (
 		labelWidth = 3
-		cellSpan   = 3 // 2-char cell + 1 space
+		cellSpan   = 2 // 1-char cell + 1 space
 	)
-	gridWidth := len(weeks) * cellSpan
-	innerWidth := 2 + labelWidth + 1 + gridWidth + 2
 
 	fmt.Println()
-	fmt.Printf("╭%s╮\n", strings.Repeat("─", innerWidth))
-	monthPad := innerWidth - 2 - (labelWidth + 1) - len(monthHeader)
-	if monthPad < 0 {
-		monthPad = 0
-	}
-	fmt.Printf("│ %s %s%s │\n", strings.Repeat(" ", labelWidth), monthHeader, strings.Repeat(" ", monthPad))
+	fmt.Printf(" %*s %s\n", labelWidth, "", monthHeader)
 	for day := 0; day < 7; day++ {
 		label := ""
 		switch day {
@@ -505,23 +499,8 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 			row.WriteString(githubStyleCell(week[day].Intensity))
 			row.WriteByte(' ')
 		}
-		fmt.Printf("│ %-*s %s │\n", labelWidth, label, row.String())
+		fmt.Printf(" %-*s %s\n", labelWidth, label, row.String())
 	}
-	helper := "Learn how we count contributions"
-	legend := fmt.Sprintf("Less %s %s %s %s %s More",
-		githubStyleCell(0),
-		githubStyleCell(1),
-		githubStyleCell(2),
-		githubStyleCell(3),
-		githubStyleCell(4),
-	)
-	legendVisible := "Less           More"
-	pad := innerWidth - 2 - len(helper) - len(legendVisible)
-	if pad < 2 {
-		pad = 2
-	}
-	fmt.Printf("│ %s%s%s │\n", helper, strings.Repeat(" ", pad), legend)
-	fmt.Printf("╰%s╯\n", strings.Repeat("─", innerWidth))
 	fmt.Println()
 }
 
@@ -529,7 +508,7 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 	if len(weeks) == 0 {
 		return ""
 	}
-	span := 3
+	span := 2
 	width := len(weeks) * span
 	runes := make([]rune, width)
 	for i := range runes {
@@ -547,10 +526,10 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 			continue
 		}
 		month := d.Format("Jan")
-		if wi == 0 || (d.Day() <= 7 && month != lastMonth) {
+		if wi == 0 || month != lastMonth {
 			start := wi * span
-			if start-lastLabelEnd < 4 {
-				start = lastLabelEnd + 4
+			if start-lastLabelEnd < 3 {
+				start = lastLabelEnd + 3
 			}
 			if start >= len(runes) {
 				continue
@@ -569,17 +548,30 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 }
 
 func githubStyleCell(intensity int) string {
-	// Contribution square-like day cell.
+	// Single-square day cell with high-contrast colors tuned for dark terminals.
 	switch intensity {
 	case 0:
-		return "\x1b[48;2;33;44;62m  \x1b[0m"
+		return "\x1b[38;2;47;62;86m■\x1b[0m"
 	case 1:
-		return "\x1b[48;2;14;68;41m  \x1b[0m"
+		return "\x1b[38;2;18;104;58m■\x1b[0m"
 	case 2:
-		return "\x1b[48;2;0;109;50m  \x1b[0m"
+		return "\x1b[38;2;21;136;66m■\x1b[0m"
 	case 3:
-		return "\x1b[48;2;38;166;65m  \x1b[0m"
+		return "\x1b[38;2;44;170;74m■\x1b[0m"
 	default:
-		return "\x1b[48;2;86;211;100m  \x1b[0m"
+		return "\x1b[38;2;120;218;110m■\x1b[0m"
 	}
+}
+
+func orderWeeksChronologically(weeks [][]domain.HeatmapCell) [][]domain.HeatmapCell {
+	sorted := make([][]domain.HeatmapCell, 0, len(weeks))
+	for _, week := range weeks {
+		if len(week) > 0 {
+			sorted = append(sorted, week)
+		}
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i][0].Date < sorted[j][0].Date
+	})
+	return sorted
 }
