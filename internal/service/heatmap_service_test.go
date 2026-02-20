@@ -45,3 +45,46 @@ func TestHeatmapIntensityBuckets(t *testing.T) {
 		t.Fatal("date not found in heatmap")
 	}
 }
+
+func TestRecentWeeksTodayThreeLogs(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	logs := NewLogService(st)
+	heat := NewHeatmapService(st)
+	ctx := context.Background()
+	today := time.Now().In(time.Local)
+	for i := 0; i < 3; i++ {
+		if _, err := logs.Add(ctx, domain.AddLogInput{
+			Title:    "T",
+			LoggedAt: today.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hm, err := heat.RecentWeeks(ctx, 53, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetDate := today.Format(domain.DateLayout)
+	found := false
+	for _, w := range hm.Weeks {
+		for _, c := range w {
+			if c.Date == targetDate {
+				found = true
+				if c.Count != 3 {
+					t.Fatalf("expected count 3, got %d", c.Count)
+				}
+				if c.Intensity != 3 {
+					t.Fatalf("expected intensity 3, got %d", c.Intensity)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("today %s not found in recent heatmap", targetDate)
+	}
+}

@@ -49,8 +49,7 @@ func RunAuto(args []string) error {
 		}
 	}
 
-	y := time.Now().Year()
-	hm, err := deps.heat.Year(ctx, y)
+	hm, err := deps.heat.RecentWeeks(ctx, 53, time.Now())
 	if err != nil {
 		return err
 	}
@@ -218,11 +217,18 @@ func (d *dependencies) run(args []string) error {
 		return nil
 	case "heatmap":
 		fs := flag.NewFlagSet("heatmap", flag.ContinueOnError)
-		year := fs.Int("year", time.Now().Year(), "year")
+		year := fs.Int("year", 0, "year")
+		recentWeeks := fs.Int("recent-weeks", 53, "show rolling recent weeks ending now")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		hm, err := d.heat.Year(ctx, *year)
+		var hm domain.HeatmapMatrix
+		var err error
+		if *year > 0 {
+			hm, err = d.heat.Year(ctx, *year)
+		} else {
+			hm, err = d.heat.RecentWeeks(ctx, *recentWeeks, time.Now())
+		}
 		if err != nil {
 			return err
 		}
@@ -411,7 +417,7 @@ func printUsage() {
 	fmt.Println("  list [--from --to --title]")
 	fmt.Println("  edit --id [--title --date --rating --notes --rewatch]")
 	fmt.Println("  delete --id")
-	fmt.Println("  heatmap [--year]")
+	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
 	fmt.Println("  stats [--year]")
 	fmt.Println("  import csv --file")
 	fmt.Println("  import letterboxd --file")
@@ -470,15 +476,20 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 	}
 
 	monthHeader := buildMonthHeader(weeks)
-	rowLabelWidth := 5
-	gridCellSpan := 3 // 2-char cell + 1 space
-	gridWidth := len(weeks) * gridCellSpan
-	panelWidth := rowLabelWidth + 2 + gridWidth + 2
+	const (
+		labelWidth = 3
+		cellSpan   = 3 // 2-char cell + 1 space
+	)
+	gridWidth := len(weeks) * cellSpan
+	innerWidth := 2 + labelWidth + 1 + gridWidth + 2
 
 	fmt.Println()
-	fmt.Printf("╭%s╮\n", strings.Repeat("─", panelWidth))
-	fmt.Printf("│ %-*s │\n", panelWidth-2, monthHeader)
-
+	fmt.Printf("╭%s╮\n", strings.Repeat("─", innerWidth))
+	monthPad := innerWidth - 2 - (labelWidth + 1) - len(monthHeader)
+	if monthPad < 0 {
+		monthPad = 0
+	}
+	fmt.Printf("│ %s %s%s │\n", strings.Repeat(" ", labelWidth), monthHeader, strings.Repeat(" ", monthPad))
 	for day := 0; day < 7; day++ {
 		label := ""
 		switch day {
@@ -494,20 +505,23 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 			row.WriteString(githubStyleCell(week[day].Intensity))
 			row.WriteByte(' ')
 		}
-		fmt.Printf("│ %-*s  %s │\n", rowLabelWidth, label, row.String())
+		fmt.Printf("│ %-*s %s │\n", labelWidth, label, row.String())
 	}
-
-	legend := fmt.Sprintf(
-		"Less %s %s %s %s %s More",
+	helper := "Learn how we count contributions"
+	legend := fmt.Sprintf("Less %s %s %s %s %s More",
 		githubStyleCell(0),
 		githubStyleCell(1),
 		githubStyleCell(2),
 		githubStyleCell(3),
 		githubStyleCell(4),
 	)
-	fmt.Printf("│ %-*s │\n", panelWidth-2, "")
-	fmt.Printf("│ %-*s │\n", panelWidth-2, legend)
-	fmt.Printf("╰%s╯\n", strings.Repeat("─", panelWidth))
+	legendVisible := "Less           More"
+	pad := innerWidth - 2 - len(helper) - len(legendVisible)
+	if pad < 2 {
+		pad = 2
+	}
+	fmt.Printf("│ %s%s%s │\n", helper, strings.Repeat(" ", pad), legend)
+	fmt.Printf("╰%s╯\n", strings.Repeat("─", innerWidth))
 	fmt.Println()
 }
 
@@ -555,10 +569,10 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 }
 
 func githubStyleCell(intensity int) string {
-	// GitHub dark-like contribution colors.
+	// Contribution square-like day cell.
 	switch intensity {
 	case 0:
-		return "\x1b[48;2;22;27;34m  \x1b[0m"
+		return "\x1b[48;2;33;44;62m  \x1b[0m"
 	case 1:
 		return "\x1b[48;2;14;68;41m  \x1b[0m"
 	case 2:

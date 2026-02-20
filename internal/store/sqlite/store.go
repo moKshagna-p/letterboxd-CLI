@@ -239,6 +239,10 @@ func (s *Store) DeleteLog(ctx context.Context, id string) error {
 func (s *Store) DailyCounts(ctx context.Context, year int) (map[string]int, error) {
 	start := fmt.Sprintf("%d-01-01", year)
 	end := fmt.Sprintf("%d-12-31", year)
+	return s.DailyCountsBetween(ctx, start, end)
+}
+
+func (s *Store) DailyCountsBetween(ctx context.Context, start string, end string) (map[string]int, error) {
 	sql := fmt.Sprintf(`
 SELECT local_date, CAST(COUNT(*) AS TEXT)
 FROM film_logs
