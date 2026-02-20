@@ -463,30 +463,109 @@ func parseOptionalRating(v string) (*float64, error) {
 }
 
 func printHeatmap(hm domain.HeatmapMatrix) {
-	fmt.Printf("Heatmap %d (%s -> %s)\n", hm.Year, hm.Start, hm.End)
-	labels := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
-	for i, label := range labels {
-		fmt.Printf("%s ", label)
-		for _, w := range hm.Weeks {
-			cell := w[i]
-			fmt.Print(intensityChar(cell.Intensity), " ")
-		}
-		fmt.Println()
+	weeks := hm.Weeks
+	if len(weeks) == 0 {
+		fmt.Println("No heatmap data.")
+		return
 	}
-	fmt.Println("Legend: . 0, l 1, m 2, h 3, # 4+")
+
+	monthHeader := buildMonthHeader(weeks)
+	rowLabelWidth := 5
+	gridCellSpan := 3 // 2-char cell + 1 space
+	gridWidth := len(weeks) * gridCellSpan
+	panelWidth := rowLabelWidth + 2 + gridWidth + 2
+
+	fmt.Println()
+	fmt.Printf("╭%s╮\n", strings.Repeat("─", panelWidth))
+	fmt.Printf("│ %-*s │\n", panelWidth-2, monthHeader)
+
+	for day := 0; day < 7; day++ {
+		label := ""
+		switch day {
+		case 1:
+			label = "Mon"
+		case 3:
+			label = "Wed"
+		case 5:
+			label = "Fri"
+		}
+		var row strings.Builder
+		for _, week := range weeks {
+			row.WriteString(githubStyleCell(week[day].Intensity))
+			row.WriteByte(' ')
+		}
+		fmt.Printf("│ %-*s  %s │\n", rowLabelWidth, label, row.String())
+	}
+
+	legend := fmt.Sprintf(
+		"Less %s %s %s %s %s More",
+		githubStyleCell(0),
+		githubStyleCell(1),
+		githubStyleCell(2),
+		githubStyleCell(3),
+		githubStyleCell(4),
+	)
+	fmt.Printf("│ %-*s │\n", panelWidth-2, "")
+	fmt.Printf("│ %-*s │\n", panelWidth-2, legend)
+	fmt.Printf("╰%s╯\n", strings.Repeat("─", panelWidth))
+	fmt.Println()
 }
 
-func intensityChar(v int) string {
-	switch v {
+func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
+	if len(weeks) == 0 {
+		return ""
+	}
+	span := 3
+	width := len(weeks) * span
+	runes := make([]rune, width)
+	for i := range runes {
+		runes[i] = ' '
+	}
+	lastMonth := ""
+	lastLabelEnd := -4
+	for wi, week := range weeks {
+		if len(week) == 0 {
+			continue
+		}
+		// Use Sunday cell as the week anchor for month labels.
+		d, err := time.Parse(domain.DateLayout, week[0].Date)
+		if err != nil {
+			continue
+		}
+		month := d.Format("Jan")
+		if wi == 0 || (d.Day() <= 7 && month != lastMonth) {
+			start := wi * span
+			if start-lastLabelEnd < 4 {
+				start = lastLabelEnd + 4
+			}
+			if start >= len(runes) {
+				continue
+			}
+			for i, ch := range month {
+				if start+i >= len(runes) {
+					break
+				}
+				runes[start+i] = ch
+			}
+			lastMonth = month
+			lastLabelEnd = start + len(month)
+		}
+	}
+	return strings.TrimRight(string(runes), " ")
+}
+
+func githubStyleCell(intensity int) string {
+	// GitHub dark-like contribution colors.
+	switch intensity {
 	case 0:
-		return "."
+		return "\x1b[48;2;22;27;34m  \x1b[0m"
 	case 1:
-		return "l"
+		return "\x1b[48;2;14;68;41m  \x1b[0m"
 	case 2:
-		return "m"
+		return "\x1b[48;2;0;109;50m  \x1b[0m"
 	case 3:
-		return "h"
+		return "\x1b[48;2;38;166;65m  \x1b[0m"
 	default:
-		return "#"
+		return "\x1b[48;2;86;211;100m  \x1b[0m"
 	}
 }
