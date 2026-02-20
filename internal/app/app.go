@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,13 +51,7 @@ func RunAuto(args []string) error {
 		}
 	}
 
-	hm, err := deps.heat.RecentWeeks(ctx, 53, time.Now())
-	if err != nil {
-		return err
-	}
-	printHeatmap(hm)
-	fmt.Println("Tip: run `film-heatmap list` or `film-heatmap add --title ...`")
-	return nil
+	return deps.runUI(ctx)
 }
 
 type dependencies struct {
@@ -65,6 +60,7 @@ type dependencies struct {
 	heat   *service.HeatmapService
 	stats  *service.StatsService
 	csvSvc *service.CSVService
+	lib    *service.LibraryService
 }
 
 func (d *dependencies) close() {
@@ -87,6 +83,7 @@ func newDeps() (*dependencies, error) {
 		heat:   service.NewHeatmapService(st),
 		stats:  service.NewStatsService(st),
 		csvSvc: service.NewCSVService(logs),
+		lib:    service.NewLibraryService(st),
 	}, nil
 }
 
@@ -235,6 +232,8 @@ func (d *dependencies) run(args []string) error {
 		}
 		printHeatmap(hm)
 		return nil
+	case "ui":
+		return d.runUI(ctx)
 	case "stats":
 		fs := flag.NewFlagSet("stats", flag.ContinueOnError)
 		year := fs.Int("year", time.Now().Year(), "year")
@@ -412,6 +411,425 @@ func hasDiaryCSV(zipPath string) (bool, error) {
 	return false, nil
 }
 
+func (d *dependencies) runUI(ctx context.Context) error {
+	printUIBanner()
+	printUIHelp()
+	r := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("\n%sletterboxd-cli%s > ", uiAccent, uiReset)
+		line, err := r.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			continue
+		}
+		if done, cmdErr := d.handleUICommand(ctx, line); cmdErr != nil {
+			fmt.Printf("%serror:%s %v\n", uiError, uiReset, cmdErr)
+		} else if done {
+			return nil
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+	}
+}
+
+func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, error) {
+	args, err := splitUIArgs(line)
+	if err != nil {
+		return false, err
+	}
+	if len(args) == 0 {
+		return false, nil
+	}
+	switch args[0] {
+	case "help":
+		printUIHelp()
+	case "clear":
+		fmt.Print("\x1b[2J\x1b[H")
+		printUIBanner()
+	case "exit", "quit", "q":
+		return true, nil
+	case "heatmap":
+		hm, err := d.heat.RecentWeeks(ctx, 53, time.Now())
+		if err != nil {
+			return false, err
+		}
+		printHeatmap(hm)
+	case "stats":
+		st, err := d.stats.Year(ctx, time.Now().Year())
+		if err != nil {
+			return false, err
+		}
+		printStatsCard(st)
+	case "watched":
+		return false, d.showWatched(ctx, 20)
+	case "ratings":
+		return false, d.showRatings(ctx, 20)
+	case "reviews":
+		return false, d.showReviews(ctx, 20)
+	case "watchlist":
+		if len(args) == 1 {
+			return false, d.showWatchlist(ctx)
+		}
+		switch args[1] {
+		case "add":
+			title, notes, err := parseTitleWithOptionalNotes(args, 2)
+			if err != nil {
+				return false, err
+			}
+			item, err := d.lib.AddWatchlist(ctx, domain.AddWatchlistInput{Title: title, Notes: notes})
+			if err != nil {
+				return false, err
+			}
+			fmt.Printf("%sadded watchlist:%s %s (%s)\n", uiAccent, uiReset, item.Title, shortID(item.ID))
+			return false, d.showWatchlist(ctx)
+		case "rm", "remove", "delete":
+			if len(args) < 3 {
+				return false, errors.New("usage: watchlist rm <item-id>")
+			}
+			if err := d.lib.RemoveWatchlist(ctx, args[2]); err != nil {
+				return false, err
+			}
+			fmt.Printf("%sremoved watchlist item%s %s\n", uiAccent, uiReset, args[2])
+			return false, d.showWatchlist(ctx)
+		default:
+			return false, errors.New("usage: watchlist [add|rm]")
+		}
+	case "lists":
+		if len(args) == 1 {
+			return false, d.showLists(ctx)
+		}
+		switch args[1] {
+		case "create":
+			if len(args) < 3 {
+				return false, errors.New("usage: lists create <name>")
+			}
+			name := strings.Join(args[2:], " ")
+			lst, err := d.lib.AddList(ctx, domain.AddFilmListInput{Name: name})
+			if err != nil {
+				return false, err
+			}
+			fmt.Printf("%screated list:%s %s (%s)\n", uiAccent, uiReset, lst.Name, shortID(lst.ID))
+			return false, d.showLists(ctx)
+		case "add":
+			if len(args) < 4 {
+				return false, errors.New("usage: lists add <list-id> <title> [--notes text]")
+			}
+			listID := args[2]
+			title, notes, err := parseTitleWithOptionalNotes(args, 3)
+			if err != nil {
+				return false, err
+			}
+			item, err := d.lib.AddListItem(ctx, domain.AddFilmListItemInput{ListID: listID, Title: title, Notes: notes})
+			if err != nil {
+				return false, err
+			}
+			fmt.Printf("%sadded to list:%s #%d %s\n", uiAccent, uiReset, item.Position, item.Title)
+			return false, d.showListItems(ctx, listID)
+		case "view":
+			if len(args) < 3 {
+				return false, errors.New("usage: lists view <list-id>")
+			}
+			return false, d.showListItems(ctx, args[2])
+		default:
+			return false, errors.New("usage: lists [create|add|view]")
+		}
+	default:
+		return false, fmt.Errorf("unknown command: %s (try `help`)", args[0])
+	}
+	return false, nil
+}
+
+func (d *dependencies) showWatched(ctx context.Context, limit int) error {
+	rows, err := d.logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, min(limit, len(rows)))
+	for i, r := range rows {
+		if i >= limit {
+			break
+		}
+		rating := "-"
+		if r.Rating != nil {
+			rating = fmt.Sprintf("%.1f★", *r.Rating)
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s", r.LocalDate, padRight(rating, 5), r.Title))
+	}
+	printUICard("Watched", fmt.Sprintf("Latest %d entries", len(lines)), lines, uiAccent)
+	return nil
+}
+
+func (d *dependencies) showRatings(ctx context.Context, limit int) error {
+	rows, err := d.logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		return err
+	}
+	rated := make([]domain.FilmLog, 0, len(rows))
+	for _, r := range rows {
+		if r.Rating != nil {
+			rated = append(rated, r)
+		}
+	}
+	sort.SliceStable(rated, func(i, j int) bool {
+		if *rated[i].Rating == *rated[j].Rating {
+			return rated[i].LoggedAt.After(rated[j].LoggedAt)
+		}
+		return *rated[i].Rating > *rated[j].Rating
+	})
+	lines := make([]string, 0, min(limit, len(rated)))
+	for i, r := range rated {
+		if i >= limit {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("%s  %.1f★  %s", r.LocalDate, *r.Rating, r.Title))
+	}
+	printUICard("Ratings", fmt.Sprintf("Top %d rated logs", len(lines)), lines, uiWarm)
+	return nil
+}
+
+func (d *dependencies) showReviews(ctx context.Context, limit int) error {
+	rows, err := d.logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, limit)
+	for _, r := range rows {
+		if len(lines) >= limit {
+			break
+		}
+		if r.Notes == nil || strings.TrimSpace(*r.Notes) == "" {
+			continue
+		}
+		preview := strings.TrimSpace(*r.Notes)
+		if len(preview) > 46 {
+			preview = preview[:46] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s", r.LocalDate, r.Title, preview))
+	}
+	printUICard("Reviews", fmt.Sprintf("Recent %d notes", len(lines)), lines, uiRose)
+	return nil
+}
+
+func (d *dependencies) showWatchlist(ctx context.Context) error {
+	rows, err := d.lib.ListWatchlist(ctx)
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		line := fmt.Sprintf("%s  %s  %s", shortID(r.ID), r.AddedAt.In(time.Local).Format(domain.DateLayout), r.Title)
+		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
+			line += " | " + *r.Notes
+		}
+		lines = append(lines, line)
+	}
+	printUICard("Watchlist", "Planned watches", lines, uiCool)
+	return nil
+}
+
+func (d *dependencies) showLists(ctx context.Context) error {
+	rows, err := d.lib.ListLists(ctx)
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, len(rows))
+	for _, lst := range rows {
+		items, err := d.lib.ListListItems(ctx, lst.ID)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s (%d films)", shortID(lst.ID), lst.Name, len(items)))
+	}
+	printUICard("Lists", "Custom collections", lines, uiAccent)
+	return nil
+}
+
+func (d *dependencies) showListItems(ctx context.Context, listID string) error {
+	lists, err := d.lib.ListLists(ctx)
+	if err != nil {
+		return err
+	}
+	name := listID
+	for _, lst := range lists {
+		if lst.ID == listID {
+			name = lst.Name
+			break
+		}
+	}
+	rows, err := d.lib.ListListItems(ctx, listID)
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		line := fmt.Sprintf("%2d. %s", r.Position, r.Title)
+		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
+			line += " | " + *r.Notes
+		}
+		lines = append(lines, line)
+	}
+	printUICard("List View", fmt.Sprintf("%s (%d films)", name, len(rows)), lines, uiWarm)
+	return nil
+}
+
+const (
+	uiReset  = "\x1b[0m"
+	uiAccent = "\x1b[38;2;255;168;76m"
+	uiWarm   = "\x1b[38;2;255;116;94m"
+	uiRose   = "\x1b[38;2;240;102;156m"
+	uiCool   = "\x1b[38;2;104;193;255m"
+	uiError  = "\x1b[38;2;255;82;82m"
+)
+
+func printUIBanner() {
+	fmt.Println(uiAccent + "╔══════════════════════════════════════════════╗" + uiReset)
+	fmt.Println(uiAccent + "║" + uiReset + "            Letterboxd CLI Studio             " + uiAccent + "║" + uiReset)
+	fmt.Println(uiAccent + "╚══════════════════════════════════════════════╝" + uiReset)
+}
+
+func printUIHelp() {
+	fmt.Println("Commands:")
+	fmt.Println("  watched                show watched films")
+	fmt.Println("  ratings                show top ratings")
+	fmt.Println("  reviews                show recent reviews/notes")
+	fmt.Println("  watchlist              show watchlist")
+	fmt.Println("  watchlist add <title> [--notes text]")
+	fmt.Println("  watchlist rm <item-id>")
+	fmt.Println("  lists                  show custom lists")
+	fmt.Println("  lists create <name>")
+	fmt.Println("  lists add <list-id> <title> [--notes text]")
+	fmt.Println("  lists view <list-id>")
+	fmt.Println("  heatmap                show heatmap")
+	fmt.Println("  stats                  show yearly stats")
+	fmt.Println("  clear                  clear screen")
+	fmt.Println("  help                   show commands")
+	fmt.Println("  exit                   quit")
+}
+
+func printUICard(title string, subtitle string, lines []string, color string) {
+	fmt.Printf("\n%s◆ %s%s\n", color, title, uiReset)
+	if subtitle != "" {
+		fmt.Printf("%s%s%s\n", color, subtitle, uiReset)
+	}
+	if len(lines) == 0 {
+		fmt.Printf("%s(no data)%s\n", uiRose, uiReset)
+		return
+	}
+	for _, line := range lines {
+		fmt.Printf("  %s\n", line)
+	}
+}
+
+func printStatsCard(stt domain.YearStats) {
+	lines := []string{
+		fmt.Sprintf("year: %d", stt.Year),
+		fmt.Sprintf("total logs: %d", stt.TotalLogs),
+		fmt.Sprintf("active days: %d", stt.ActiveDays),
+		fmt.Sprintf("longest streak: %d", stt.LongestStreak),
+		fmt.Sprintf("current streak: %d", stt.CurrentStreak),
+	}
+	printUICard("Stats", "Year summary", lines, uiCool)
+}
+
+func parseTitleWithOptionalNotes(args []string, start int) (string, *string, error) {
+	if start >= len(args) {
+		return "", nil, errors.New("title is required")
+	}
+	noteFlag := -1
+	for i := start; i < len(args); i++ {
+		if args[i] == "--notes" {
+			noteFlag = i
+			break
+		}
+	}
+	var titleParts []string
+	var notes *string
+	if noteFlag >= 0 {
+		titleParts = args[start:noteFlag]
+		if noteFlag+1 >= len(args) {
+			return "", nil, errors.New("--notes requires text")
+		}
+		n := strings.Join(args[noteFlag+1:], " ")
+		notes = &n
+	} else {
+		titleParts = args[start:]
+	}
+	title := strings.TrimSpace(strings.Join(titleParts, " "))
+	if title == "" {
+		return "", nil, errors.New("title is required")
+	}
+	return title, notes, nil
+}
+
+func splitUIArgs(line string) ([]string, error) {
+	var out []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	for _, ch := range line {
+		if escaped {
+			current.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			} else {
+				current.WriteRune(ch)
+			}
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			quote = ch
+			continue
+		}
+		if ch == ' ' || ch == '\t' {
+			if current.Len() > 0 {
+				out = append(out, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteRune(ch)
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quote")
+	}
+	if current.Len() > 0 {
+		out = append(out, current.String())
+	}
+	return out, nil
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+func padRight(s string, n int) string {
+	if len(s) >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-len(s))
+}
+
 func printUsage() {
 	fmt.Println("film-heatmap commands:")
 	fmt.Println("  add --title --date [--rating --notes --rewatch]")
@@ -423,6 +841,7 @@ func printUsage() {
 	fmt.Println("  import csv --file")
 	fmt.Println("  import letterboxd --file")
 	fmt.Println("  export csv --file [--year]")
+	fmt.Println("  ui")
 }
 
 func parseDateFlag(v string) (time.Time, error) {
@@ -548,18 +967,18 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 }
 
 func githubStyleCell(intensity int) string {
-	// Single-square day cell with high-contrast colors tuned for dark terminals.
+	// Warm palette to avoid a typical "developer green" graph look.
 	switch intensity {
 	case 0:
 		return "\x1b[38;2;47;62;86m■\x1b[0m"
 	case 1:
-		return "\x1b[38;2;18;104;58m■\x1b[0m"
+		return "\x1b[38;2;143;94;35m■\x1b[0m"
 	case 2:
-		return "\x1b[38;2;21;136;66m■\x1b[0m"
+		return "\x1b[38;2;186;103;54m■\x1b[0m"
 	case 3:
-		return "\x1b[38;2;44;170;74m■\x1b[0m"
+		return "\x1b[38;2;224;118;96m■\x1b[0m"
 	default:
-		return "\x1b[38;2;120;218;110m■\x1b[0m"
+		return "\x1b[38;2;255;152;122m■\x1b[0m"
 	}
 }
 

@@ -56,11 +56,12 @@ func TestRecentWeeksTodayThreeLogs(t *testing.T) {
 	logs := NewLogService(st)
 	heat := NewHeatmapService(st)
 	ctx := context.Background()
-	today := time.Now().In(time.Local)
+	now := time.Now().In(time.Local)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
 	for i := 0; i < 3; i++ {
 		if _, err := logs.Add(ctx, domain.AddLogInput{
 			Title:    "T",
-			LoggedAt: today.Add(time.Duration(i) * time.Hour),
+			LoggedAt: today.Add(time.Duration(i) * time.Minute),
 		}); err != nil {
 			t.Fatal(err)
 		}

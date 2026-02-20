@@ -36,6 +36,33 @@ CREATE TABLE IF NOT EXISTS film_logs (
 CREATE INDEX IF NOT EXISTS idx_film_logs_profile_local_date ON film_logs(profile_id, local_date);
 CREATE INDEX IF NOT EXISTS idx_film_logs_profile_logged_at ON film_logs(profile_id, logged_at);
 CREATE INDEX IF NOT EXISTS idx_film_logs_profile_title ON film_logs(profile_id, title);
+CREATE TABLE IF NOT EXISTS watchlist_items (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  added_at TEXT NOT NULL,
+  FOREIGN KEY(profile_id) REFERENCES profiles(id)
+);
+CREATE INDEX IF NOT EXISTS idx_watchlist_items_profile_added_at ON watchlist_items(profile_id, added_at DESC);
+CREATE TABLE IF NOT EXISTS film_lists (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(profile_id) REFERENCES profiles(id)
+);
+CREATE INDEX IF NOT EXISTS idx_film_lists_profile_name ON film_lists(profile_id, name);
+CREATE TABLE IF NOT EXISTS film_list_items (
+  id TEXT PRIMARY KEY,
+  list_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  position INTEGER NOT NULL,
+  added_at TEXT NOT NULL,
+  FOREIGN KEY(list_id) REFERENCES film_lists(id)
+);
+CREATE INDEX IF NOT EXISTS idx_film_list_items_list_position ON film_list_items(list_id, position);
 `
 
 type Store struct {
