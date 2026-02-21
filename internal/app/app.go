@@ -597,7 +597,7 @@ func (d *dependencies) runUI(ctx context.Context) error {
 	printUIHelp()
 	r := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Printf("\n%sletterboxd-cli%s > ", uiAccent, uiReset)
+		fmt.Printf("\n%s%s●%s %sops-console%s %s❯%s ", uiCool, uiDim, uiReset, uiAccent, uiReset, uiWarm, uiReset)
 		line, err := r.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
@@ -739,6 +739,7 @@ func (d *dependencies) showWatched(ctx context.Context, limit int) error {
 		return err
 	}
 	lines := make([]string, 0, min(limit, len(rows)))
+	lines = append(lines, tableHeader([]string{"Date", "Rate", "Title"}, []int{10, 6, 52}))
 	for i, r := range rows {
 		if i >= limit {
 			break
@@ -747,9 +748,9 @@ func (d *dependencies) showWatched(ctx context.Context, limit int) error {
 		if r.Rating != nil {
 			rating = fmt.Sprintf("%.1f★", *r.Rating)
 		}
-		lines = append(lines, fmt.Sprintf("%s  %s  %s", r.LocalDate, padRight(rating, 5), r.Title))
+		lines = append(lines, tableRow([]string{r.LocalDate, rating, r.Title}, []int{10, 6, 52}))
 	}
-	printUICard("Watched", fmt.Sprintf("Latest %d entries", len(lines)), lines, uiAccent)
+	printUICard("Watched Feed", fmt.Sprintf("Latest %d entries", max(0, len(lines)-1)), lines, uiAccent)
 	return nil
 }
 
@@ -771,13 +772,14 @@ func (d *dependencies) showRatings(ctx context.Context, limit int) error {
 		return *rated[i].Rating > *rated[j].Rating
 	})
 	lines := make([]string, 0, min(limit, len(rated)))
+	lines = append(lines, tableHeader([]string{"Date", "Score", "Title"}, []int{10, 6, 52}))
 	for i, r := range rated {
 		if i >= limit {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%s  %.1f★  %s", r.LocalDate, *r.Rating, r.Title))
+		lines = append(lines, tableRow([]string{r.LocalDate, fmt.Sprintf("%.1f★", *r.Rating), r.Title}, []int{10, 6, 52}))
 	}
-	printUICard("Ratings", fmt.Sprintf("Top %d rated logs", len(lines)), lines, uiWarm)
+	printUICard("Ratings Desk", fmt.Sprintf("Top %d rated logs", max(0, len(lines)-1)), lines, uiWarm)
 	return nil
 }
 
@@ -787,20 +789,18 @@ func (d *dependencies) showReviews(ctx context.Context, limit int) error {
 		return err
 	}
 	lines := make([]string, 0, limit)
+	lines = append(lines, tableHeader([]string{"Date", "Film", "Note Preview"}, []int{10, 26, 32}))
 	for _, r := range rows {
-		if len(lines) >= limit {
+		if len(lines)-1 >= limit {
 			break
 		}
 		if r.Notes == nil || strings.TrimSpace(*r.Notes) == "" {
 			continue
 		}
 		preview := strings.TrimSpace(*r.Notes)
-		if len(preview) > 46 {
-			preview = preview[:46] + "..."
-		}
-		lines = append(lines, fmt.Sprintf("%s  %s  %s", r.LocalDate, r.Title, preview))
+		lines = append(lines, tableRow([]string{r.LocalDate, r.Title, preview}, []int{10, 26, 32}))
 	}
-	printUICard("Reviews", fmt.Sprintf("Recent %d notes", len(lines)), lines, uiRose)
+	printUICard("Review Notes", fmt.Sprintf("Recent %d notes", max(0, len(lines)-1)), lines, uiRose)
 	return nil
 }
 
@@ -810,14 +810,15 @@ func (d *dependencies) showWatchlist(ctx context.Context) error {
 		return err
 	}
 	lines := make([]string, 0, len(rows))
+	lines = append(lines, tableHeader([]string{"ID", "Added", "Title / Notes"}, []int{8, 10, 50}))
 	for _, r := range rows {
-		line := fmt.Sprintf("%s  %s  %s", shortID(r.ID), r.AddedAt.In(time.Local).Format(domain.DateLayout), r.Title)
+		line := r.Title
 		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
 			line += " | " + *r.Notes
 		}
-		lines = append(lines, line)
+		lines = append(lines, tableRow([]string{shortID(r.ID), r.AddedAt.In(time.Local).Format(domain.DateLayout), line}, []int{8, 10, 50}))
 	}
-	printUICard("Watchlist", "Planned watches", lines, uiCool)
+	printUICard("Watchlist Queue", "Planned watches", lines, uiCool)
 	return nil
 }
 
@@ -827,14 +828,15 @@ func (d *dependencies) showLists(ctx context.Context) error {
 		return err
 	}
 	lines := make([]string, 0, len(rows))
+	lines = append(lines, tableHeader([]string{"ID", "List", "Films"}, []int{8, 42, 6}))
 	for _, lst := range rows {
 		items, err := d.lib.ListListItems(ctx, lst.ID)
 		if err != nil {
 			return err
 		}
-		lines = append(lines, fmt.Sprintf("%s  %s (%d films)", shortID(lst.ID), lst.Name, len(items)))
+		lines = append(lines, tableRow([]string{shortID(lst.ID), lst.Name, fmt.Sprintf("%d", len(items))}, []int{8, 42, 6}))
 	}
-	printUICard("Lists", "Custom collections", lines, uiAccent)
+	printUICard("Collections", "Custom lists", lines, uiAccent)
 	return nil
 }
 
@@ -855,14 +857,15 @@ func (d *dependencies) showListItems(ctx context.Context, listID string) error {
 		return err
 	}
 	lines := make([]string, 0, len(rows))
+	lines = append(lines, tableHeader([]string{"#", "Title", "Notes"}, []int{3, 36, 24}))
 	for _, r := range rows {
-		line := fmt.Sprintf("%2d. %s", r.Position, r.Title)
+		notes := ""
 		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
-			line += " | " + *r.Notes
+			notes = *r.Notes
 		}
-		lines = append(lines, line)
+		lines = append(lines, tableRow([]string{fmt.Sprintf("%d", r.Position), r.Title, notes}, []int{3, 36, 24}))
 	}
-	printUICard("List View", fmt.Sprintf("%s (%d films)", name, len(rows)), lines, uiWarm)
+	printUICard("Collection View", fmt.Sprintf("%s (%d films)", name, len(rows)), lines, uiWarm)
 	return nil
 }
 
@@ -873,57 +876,96 @@ const (
 	uiRose   = "\x1b[38;2;240;102;156m"
 	uiCool   = "\x1b[38;2;104;193;255m"
 	uiError  = "\x1b[38;2;255;82;82m"
+	uiDim    = "\x1b[38;2;146;162;189m"
+	uiPanel  = "\x1b[38;2;34;49;75m"
+	uiStrong = "\x1b[1m"
 )
 
 func printUIBanner() {
-	fmt.Println(uiAccent + "╔══════════════════════════════════════════════╗" + uiReset)
-	fmt.Println(uiAccent + "║" + uiReset + "            Letterboxd CLI Studio             " + uiAccent + "║" + uiReset)
-	fmt.Println(uiAccent + "╚══════════════════════════════════════════════╝" + uiReset)
+	fmt.Println(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
+	fmt.Printf("%s┃%s %sLETTERBOXD OPERATIONS CONSOLE%s%s  %sData • Analytics • Curation%s %s┃%s\n",
+		uiPanel, uiReset, uiStrong, uiAccent, uiReset, uiDim, uiReset, uiPanel, uiReset)
+	fmt.Printf("%s┃%s %sSession:%s interactive shell  %sMode:%s production-grade TUI            %s┃%s\n",
+		uiPanel, uiReset, uiDim, uiReset, uiDim, uiReset, uiPanel, uiReset)
+	fmt.Println(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
 }
 
 func printUIHelp() {
-	fmt.Println("Commands:")
-	fmt.Println("  watched                show watched films")
-	fmt.Println("  ratings                show top ratings")
-	fmt.Println("  reviews                show recent reviews/notes")
-	fmt.Println("  watchlist              show watchlist")
-	fmt.Println("  watchlist add <title> [--notes text]")
-	fmt.Println("  watchlist rm <item-id>")
-	fmt.Println("  lists                  show custom lists")
-	fmt.Println("  lists create <name>")
-	fmt.Println("  lists add <list-id> <title> [--notes text]")
-	fmt.Println("  lists view <list-id>")
-	fmt.Println("  heatmap                show heatmap")
-	fmt.Println("  stats                  show yearly stats")
-	fmt.Println("  refresh                fetch latest export via browser and import")
-	fmt.Println("  clear                  clear screen")
-	fmt.Println("  help                   show commands")
-	fmt.Println("  exit                   quit")
+	fmt.Println(uiDim + "Command Palette" + uiReset)
+	fmt.Println("  data:      watched | ratings | reviews | heatmap | stats | refresh")
+	fmt.Println("  watchlist: watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
+	fmt.Println("  lists:     lists | lists create <name> | lists add <list-id> <title> [--notes text] | lists view <list-id>")
+	fmt.Println("  system:    clear | help | exit")
 }
 
 func printUICard(title string, subtitle string, lines []string, color string) {
-	fmt.Printf("\n%s◆ %s%s\n", color, title, uiReset)
+	innerWidth := 74
+	top := "┌" + strings.Repeat("─", innerWidth) + "┐"
+	bottom := "└" + strings.Repeat("─", innerWidth) + "┘"
+	fmt.Printf("\n%s%s%s\n", uiPanel, top, uiReset)
+	fmt.Printf("%s│%s %s%s%s\n", uiPanel, uiReset, uiStrong, clipText(title, innerWidth-1), uiReset)
 	if subtitle != "" {
-		fmt.Printf("%s%s%s\n", color, subtitle, uiReset)
+		fmt.Printf("%s│%s %s%s\n", uiPanel, uiReset, uiDim, clipText(subtitle, innerWidth-1)+uiReset)
+		fmt.Printf("%s│%s %s\n", uiPanel, uiReset, strings.Repeat("·", innerWidth-1))
 	}
 	if len(lines) == 0 {
-		fmt.Printf("%s(no data)%s\n", uiRose, uiReset)
+		fmt.Printf("%s│%s %s(no data)%s\n", uiPanel, uiReset, uiRose, uiReset)
+		fmt.Printf("%s%s%s\n", uiPanel, bottom, uiReset)
 		return
 	}
 	for _, line := range lines {
-		fmt.Printf("  %s\n", line)
+		padded := padRight(clipText(line, innerWidth-1), innerWidth-1)
+		fmt.Printf("%s│%s %s%s\n", uiPanel, uiReset, color, padded+uiReset)
 	}
+	fmt.Printf("%s%s%s\n", uiPanel, bottom, uiReset)
 }
 
 func printStatsCard(stt domain.YearStats) {
-	lines := []string{
-		fmt.Sprintf("year: %d", stt.Year),
-		fmt.Sprintf("total logs: %d", stt.TotalLogs),
-		fmt.Sprintf("active days: %d", stt.ActiveDays),
-		fmt.Sprintf("longest streak: %d", stt.LongestStreak),
-		fmt.Sprintf("current streak: %d", stt.CurrentStreak),
+	lines := []string{tableHeader([]string{"Metric", "Value"}, []int{32, 8})}
+	stats := [][]string{
+		{"Year", fmt.Sprintf("%d", stt.Year)},
+		{"Total Logs", fmt.Sprintf("%d", stt.TotalLogs)},
+		{"Active Days", fmt.Sprintf("%d", stt.ActiveDays)},
+		{"Longest Streak", fmt.Sprintf("%d", stt.LongestStreak)},
+		{"Current Streak", fmt.Sprintf("%d", stt.CurrentStreak)},
 	}
-	printUICard("Stats", "Year summary", lines, uiCool)
+	for _, row := range stats {
+		lines = append(lines, tableRow(row, []int{32, 8}))
+	}
+	printUICard("Analytics Snapshot", "Year summary", lines, uiCool)
+}
+
+func tableHeader(cols []string, widths []int) string {
+	upper := make([]string, 0, len(cols))
+	for _, c := range cols {
+		upper = append(upper, strings.ToUpper(c))
+	}
+	return tableRow(upper, widths)
+}
+
+func tableRow(cols []string, widths []int) string {
+	parts := make([]string, 0, len(cols))
+	for i, c := range cols {
+		w := 12
+		if i < len(widths) {
+			w = widths[i]
+		}
+		parts = append(parts, padRight(clipText(c, w), w))
+	}
+	return strings.Join(parts, "  ")
+}
+
+func clipText(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func parseTitleWithOptionalNotes(args []string, start int) (string, *string, error) {
