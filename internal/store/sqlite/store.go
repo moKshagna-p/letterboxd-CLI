@@ -263,6 +263,39 @@ func (s *Store) DeleteLog(ctx context.Context, id string) error {
 	return s.exec(ctx, sql)
 }
 
+func (s *Store) DedupeLogs(ctx context.Context) (int, error) {
+	before, err := s.logCount(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sql := fmt.Sprintf(`
+DELETE FROM film_logs
+WHERE profile_id = %s
+  AND EXISTS (
+    SELECT 1
+    FROM film_logs prev
+    WHERE prev.profile_id = film_logs.profile_id
+      AND LOWER(TRIM(prev.title)) = LOWER(TRIM(film_logs.title))
+      AND prev.local_date = film_logs.local_date
+      AND COALESCE(CAST(prev.rating AS TEXT), '') = COALESCE(CAST(film_logs.rating AS TEXT), '')
+      AND prev.rewatch = film_logs.rewatch
+      AND COALESCE(TRIM(prev.notes), '') = COALESCE(TRIM(film_logs.notes), '')
+      AND (prev.created_at < film_logs.created_at OR (prev.created_at = film_logs.created_at AND prev.id < film_logs.id))
+  );
+`, q(s.profileID))
+	if err := s.exec(ctx, sql); err != nil {
+		return 0, err
+	}
+	after, err := s.logCount(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if before < after {
+		return 0, nil
+	}
+	return before - after, nil
+}
+
 func (s *Store) DailyCounts(ctx context.Context, year int) (map[string]int, error) {
 	start := fmt.Sprintf("%d-01-01", year)
 	end := fmt.Sprintf("%d-12-31", year)
@@ -320,6 +353,18 @@ ORDER BY logged_at ASC;
 		logs = append(logs, v)
 	}
 	return logs, nil
+}
+
+func (s *Store) logCount(ctx context.Context) (int, error) {
+	sql := fmt.Sprintf(`SELECT CAST(COUNT(*) AS TEXT) FROM film_logs WHERE profile_id = %s;`, q(s.profileID))
+	rows, err := s.query(ctx, sql)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 || len(rows[0]) == 0 {
+		return 0, nil
+	}
+	return strconv.Atoi(rows[0][0])
 }
 
 func (s *Store) exec(ctx context.Context, sql string) error {

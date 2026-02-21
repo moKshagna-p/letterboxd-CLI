@@ -34,3 +34,7 @@ func (s *LogService) Edit(ctx context.Context, input domain.UpdateLogInput) (dom
 func (s *LogService) Delete(ctx context.Context, id string) error {
 	return s.store.DeleteLog(ctx, id)
 }
+
+func (s *LogService) Dedupe(ctx context.Context) (int, error) {
+	return s.store.DedupeLogs(ctx)
+}

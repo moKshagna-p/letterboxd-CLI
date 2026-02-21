@@ -267,6 +267,13 @@ func (d *dependencies) run(args []string) error {
 		}
 		fmt.Println("deleted", *id)
 		return nil
+	case "dedupe":
+		removed, err := d.logs.Dedupe(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("dedupe complete: removed=%d\n", removed)
+		return nil
 	case "heatmap":
 		if err := d.autoSyncIfConfigured(ctx); err != nil {
 			fmt.Println("auto-sync skipped:", err)
@@ -997,6 +1004,7 @@ func printUsage() {
 	fmt.Println("  list [--from --to --title]")
 	fmt.Println("  edit --id [--title --date --rating --notes --rewatch]")
 	fmt.Println("  delete --id")
+	fmt.Println("  dedupe")
 	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
 	fmt.Println("  stats [--year]")
 	fmt.Println("  ui")
@@ -1008,6 +1016,7 @@ func printBackendHelp() {
 	fmt.Println("  list [--from --to --title]")
 	fmt.Println("  edit --id [--title --date --rating --notes --rewatch]")
 	fmt.Println("  delete --id")
+	fmt.Println("  dedupe                       remove exact duplicate logs")
 	fmt.Println("  import csv --file <path>")
 	fmt.Println("  import letterboxd --file <path-to-zip-or-csv>")
 	fmt.Println("  export csv --file <path> [--year YYYY]")

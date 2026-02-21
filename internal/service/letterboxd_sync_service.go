@@ -112,6 +112,13 @@ func (s *LetterboxdSyncService) SyncAndImport(ctx context.Context) (SyncImportRe
 	if err != nil {
 		return SyncImportResult{}, err
 	}
+	cfg, err = s.config.Load()
+	if err != nil {
+		return SyncImportResult{}, err
+	}
+	if cfg.LastExportHash != "" && cfg.LastExportHash == hash {
+		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash}, nil
+	}
 	res, err := s.csvSvc.ImportLetterboxd(ctx, exportPath)
 	if err != nil {
 		return SyncImportResult{}, err

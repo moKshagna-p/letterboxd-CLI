@@ -42,6 +42,7 @@ film-heatmap import letterboxd --auto
 film-heatmap import letterboxd --file /path/to/letterboxd-export.zip
 film-heatmap import csv --file /path/to/logs.csv
 film-heatmap export csv --file /path/to/out.csv --year 2026
+film-heatmap dedupe
 ```
 
 ## Account commands

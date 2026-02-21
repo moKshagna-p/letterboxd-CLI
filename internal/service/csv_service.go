@@ -118,6 +118,10 @@ func (s *CSVService) importLetterboxdZip(ctx context.Context, path string) (CSVI
 }
 
 func (s *CSVService) importLetterboxdCSV(ctx context.Context, reader io.Reader) (CSVImportResult, error) {
+	seen, err := s.loadExistingLogKeys(ctx)
+	if err != nil {
+		return CSVImportResult{}, err
+	}
 	r := csv.NewReader(reader)
 	head, err := r.Read()
 	if err != nil {
@@ -185,17 +189,28 @@ func (s *CSVService) importLetterboxdCSV(ctx context.Context, reader io.Reader) 
 			n := row[notesIdx]
 			notes = &n
 		}
-		if _, err := s.logs.Add(ctx, domain.AddLogInput{Title: title, LoggedAt: loggedAt, Rating: rating, Rewatch: rewatch, Notes: notes}); err != nil {
+		in := domain.AddLogInput{Title: title, LoggedAt: loggedAt, Rating: rating, Rewatch: rewatch, Notes: notes}
+		k := logKeyFromInput(in)
+		if _, ok := seen[k]; ok {
+			out.Skipped++
+			continue
+		}
+		if _, err := s.logs.Add(ctx, in); err != nil {
 			out.Skipped++
 			out.Errors = append(out.Errors, fmt.Sprintf("line %d: %v", line, err))
 			continue
 		}
+		seen[k] = struct{}{}
 		out.Imported++
 	}
 	return out, nil
 }
 
 func (s *CSVService) importGenericCSV(ctx context.Context, reader io.Reader) (CSVImportResult, error) {
+	seen, err := s.loadExistingLogKeys(ctx)
+	if err != nil {
+		return CSVImportResult{}, err
+	}
 	r := csv.NewReader(reader)
 	head, err := r.Read()
 	if err != nil {
@@ -251,14 +266,60 @@ func (s *CSVService) importGenericCSV(ctx context.Context, reader io.Reader) (CS
 			n := row[i]
 			notes = &n
 		}
-		if _, err := s.logs.Add(ctx, domain.AddLogInput{Title: title, LoggedAt: loggedAt, Rating: rating, Rewatch: rewatch, Notes: notes}); err != nil {
+		in := domain.AddLogInput{Title: title, LoggedAt: loggedAt, Rating: rating, Rewatch: rewatch, Notes: notes}
+		k := logKeyFromInput(in)
+		if _, ok := seen[k]; ok {
+			out.Skipped++
+			continue
+		}
+		if _, err := s.logs.Add(ctx, in); err != nil {
 			out.Skipped++
 			out.Errors = append(out.Errors, fmt.Sprintf("line %d: %v", line, err))
 			continue
 		}
+		seen[k] = struct{}{}
 		out.Imported++
 	}
 	return out, nil
+}
+
+func (s *CSVService) loadExistingLogKeys(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		out[logKeyFromLog(r)] = struct{}{}
+	}
+	return out, nil
+}
+
+func logKeyFromInput(in domain.AddLogInput) string {
+	rating := ""
+	if in.Rating != nil {
+		rating = fmt.Sprintf("%.1f", *in.Rating)
+	}
+	notes := ""
+	if in.Notes != nil {
+		notes = strings.TrimSpace(*in.Notes)
+	}
+	title := strings.ToLower(strings.TrimSpace(in.Title))
+	date := domain.NormalizeLocalDate(in.LoggedAt)
+	return fmt.Sprintf("%s|%s|%s|%t|%s", title, date, rating, in.Rewatch, notes)
+}
+
+func logKeyFromLog(l domain.FilmLog) string {
+	rating := ""
+	if l.Rating != nil {
+		rating = fmt.Sprintf("%.1f", *l.Rating)
+	}
+	notes := ""
+	if l.Notes != nil {
+		notes = strings.TrimSpace(*l.Notes)
+	}
+	title := strings.ToLower(strings.TrimSpace(l.Title))
+	return fmt.Sprintf("%s|%s|%s|%t|%s", title, l.LocalDate, rating, l.Rewatch, notes)
 }
 
 func firstIndex(idx map[string]int, keys ...string) int {

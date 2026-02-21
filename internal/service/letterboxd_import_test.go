@@ -41,4 +41,19 @@ func TestImportLetterboxdDiaryCSV(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
+
+	res2, err := csvSvc.ImportLetterboxd(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Imported != 0 {
+		t.Fatalf("expected second import to be idempotent, got %+v", res2)
+	}
+	rows2, err := logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows2) != 2 {
+		t.Fatalf("expected 2 rows after second import, got %d", len(rows2))
+	}
 }
