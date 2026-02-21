@@ -22,6 +22,9 @@ film-heatmap
 - Auto-sync uses browser-auth flow (no password stored in app).
 - `auth login` opens Letterboxd sign-in in your browser.
 - `refresh` or `import letterboxd --auto` opens the export page and waits for a newly downloaded ZIP, then imports it.
+- Browser auth remains valid for 1 hour after login.
+- Auto-sync checks run at most once per hour.
+- After a successful auto import, the detected export ZIP is deleted automatically.
 - If auto-sync fails or browser auth is not configured, the app falls back to manual import (ZIP or diary CSV).
 - After import, `film-heatmap` opens the interactive CLI studio.
 

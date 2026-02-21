@@ -28,41 +28,41 @@ func NewLetterboxdDownloader() (*LetterboxdDownloader, error) {
 // DownloadLatestExport is browser-assisted:
 // 1) opens Letterboxd export page in browser
 // 2) waits for a newly downloaded zip in download dir
-// 3) copies that zip into outDir and returns the copied path
-func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, _ LetterboxdCredentials, outDir string) (string, error) {
+// 3) copies that zip into outDir and returns both import copy and source zip path
+func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, _ LetterboxdCredentials, outDir string) (DownloadedExport, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", err
+		return DownloadedExport{}, err
 	}
 	downloadDir, err := resolveDownloadDir()
 	if err != nil {
-		return "", err
+		return DownloadedExport{}, err
 	}
 	before, err := snapshotZipFiles(downloadDir)
 	if err != nil {
-		return "", err
+		return DownloadedExport{}, err
 	}
 	if err := openInBrowser("https://letterboxd.com/data/export/"); err != nil {
-		return "", err
+		return DownloadedExport{}, err
 	}
 
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return DownloadedExport{}, ctx.Err()
 		default:
 		}
 		zipPath, err := newestNewDiaryZip(downloadDir, before)
 		if err == nil {
 			out := filepath.Join(outDir, filepath.Base(zipPath))
 			if err := copyFile(zipPath, out); err != nil {
-				return "", err
+				return DownloadedExport{}, err
 			}
-			return out, nil
+			return DownloadedExport{ImportPath: out, SourcePath: zipPath}, nil
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return "", ErrNoNewExportFound
+	return DownloadedExport{}, ErrNoNewExportFound
 }
 
 // ValidateCredentials opens browser login and relies on browser-native auth validation.

@@ -12,6 +12,8 @@ import (
 type AppConfig struct {
 	AutoSyncEnabled     bool   `json:"auto_sync_enabled"`
 	BrowserAuthEnabled  bool   `json:"browser_auth_enabled"`
+	AuthExpiresAt       string `json:"auth_expires_at,omitempty"`
+	SyncCooldownUntil   string `json:"sync_cooldown_until,omitempty"`
 	CredentialsRef      string `json:"credentials_ref,omitempty"`
 	LastSyncAt          string `json:"last_sync_at,omitempty"`
 	LastExportHash      string `json:"last_export_hash,omitempty"`

@@ -118,9 +118,15 @@ func (d *dependencies) autoSyncIfConfigured(ctx context.Context) error {
 	if status == "not_logged_in" {
 		return errors.New("browser auth unavailable")
 	}
-	res, err := d.syncSvc.SyncAndImport(ctx)
+	if status == "expired" {
+		return errors.New("browser auth expired")
+	}
+	res, ran, err := d.syncSvc.SyncAndImportIfDue(ctx)
 	if err != nil {
 		return err
+	}
+	if !ran {
+		return nil
 	}
 	fmt.Printf("auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
 	return nil
@@ -340,7 +346,7 @@ func (d *dependencies) run(args []string) error {
 					break
 				}
 			}
-			if err := d.syncSvc.SetBrowserAuthConfigured(true); err != nil {
+			if err := d.syncSvc.ActivateBrowserSession(time.Hour); err != nil {
 				return err
 			}
 			if err := d.syncSvc.SetEnabled(*enableAutoSync); err != nil {
@@ -350,7 +356,7 @@ func (d *dependencies) run(args []string) error {
 			fmt.Printf("auto-sync enabled: %t\n", *enableAutoSync)
 			return nil
 		case "logout":
-			if err := d.syncSvc.SetBrowserAuthConfigured(false); err != nil {
+			if err := d.syncSvc.InvalidateBrowserSession(); err != nil {
 				return err
 			}
 			fmt.Println("logged out from app session (browser auth disabled)")
@@ -364,12 +370,28 @@ func (d *dependencies) run(args []string) error {
 			if err != nil {
 				return err
 			}
+			expiresAt, err := d.syncSvc.AuthExpiresAt()
+			if err != nil {
+				return err
+			}
+			cooldownUntil, err := d.syncSvc.SyncCooldownUntil()
+			if err != nil {
+				return err
+			}
 			fmt.Println("auto-sync enabled:", enabled)
 			switch status {
 			case "not_logged_in":
 				fmt.Println("browser auth: not configured")
+			case "expired":
+				fmt.Println("browser auth: expired")
 			default:
 				fmt.Println("browser auth:", status)
+			}
+			if expiresAt != nil {
+				fmt.Println("auth expires at:", expiresAt.In(time.Local).Format(time.RFC3339))
+			}
+			if cooldownUntil != nil && cooldownUntil.After(time.Now()) {
+				fmt.Println("next auto-sync after:", cooldownUntil.In(time.Local).Format(time.RFC3339))
 			}
 			return nil
 		default:
@@ -474,13 +496,15 @@ func onboardingImport(csvSvc *service.CSVService, syncSvc *service.LetterboxdSyn
 	fmt.Println("We'll try auto-sync first when browser auth is configured.")
 	if syncSvc != nil {
 		status, err := syncSvc.CredentialStatus()
-		if err == nil && status != "not_logged_in" {
-			res, err := syncSvc.SyncAndImport(context.Background())
-			if err == nil {
+		if err == nil && status != "not_logged_in" && status != "expired" {
+			res, ran, err := syncSvc.SyncAndImportIfDue(context.Background())
+			if err == nil && ran {
 				fmt.Printf("Auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
 				return nil
 			}
-			fmt.Println("Auto-sync failed:", err)
+			if err != nil {
+				fmt.Println("Auto-sync failed:", err)
+			}
 		}
 	}
 	fmt.Println("Export from Letterboxd and provide either the export ZIP or diary CSV path.")
@@ -1032,6 +1056,11 @@ func printFeatureHelp() {
 	fmt.Println("  auth logout")
 	fmt.Println("  refresh")
 	fmt.Println("  import letterboxd --auto")
+	fmt.Println("")
+	fmt.Println("Timing rules:")
+	fmt.Println("  - browser auth session is valid for 1 hour after `auth login`")
+	fmt.Println("  - auto-sync checks run at most once per hour")
+	fmt.Println("  - successful auto import deletes the detected export zip from Downloads")
 	fmt.Println("")
 	fmt.Println("Account/session flow:")
 	fmt.Println("  1) Logout current app session: auth logout")
