@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +84,7 @@ func newDeps() (*dependencies, error) {
 	}
 	logs := service.NewLogService(st)
 	csvSvc := service.NewCSVService(logs)
+	libSvc := service.NewLibraryService(st)
 	cfgSvc, err := service.NewAppConfigService()
 	if err != nil {
 		return nil, err
@@ -97,9 +99,9 @@ func newDeps() (*dependencies, error) {
 		heat:    service.NewHeatmapService(st),
 		stats:   service.NewStatsService(st),
 		csvSvc:  csvSvc,
-		lib:     service.NewLibraryService(st),
+		lib:     libSvc,
 		cfgSvc:  cfgSvc,
-		syncSvc: service.NewLetterboxdSyncService(csvSvc, cfgSvc, downloader),
+		syncSvc: service.NewLetterboxdSyncService(csvSvc, libSvc, cfgSvc, downloader),
 	}, nil
 }
 
@@ -128,7 +130,7 @@ func (d *dependencies) autoSyncIfConfigured(ctx context.Context) error {
 	if !ran {
 		return nil
 	}
-	fmt.Printf("auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+	fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 	return nil
 }
 
@@ -352,6 +354,12 @@ func (d *dependencies) run(args []string) error {
 			if err := d.syncSvc.SetEnabled(*enableAutoSync); err != nil {
 				return err
 			}
+			fmt.Print("Letterboxd username (for watchlist sync fallback): ")
+			username, _ := r.ReadString('\n')
+			username = strings.TrimSpace(username)
+			if err := d.syncSvc.SetUsername(username); err != nil {
+				return err
+			}
 			fmt.Println("browser auth configured")
 			fmt.Printf("auto-sync enabled: %t\n", *enableAutoSync)
 			return nil
@@ -393,6 +401,13 @@ func (d *dependencies) run(args []string) error {
 			if cooldownUntil != nil && cooldownUntil.After(time.Now()) {
 				fmt.Println("next auto-sync after:", cooldownUntil.In(time.Local).Format(time.RFC3339))
 			}
+			username, err := d.syncSvc.Username()
+			if err != nil {
+				return err
+			}
+			if username != "" {
+				fmt.Println("watchlist username:", username)
+			}
 			return nil
 		default:
 			return errors.New("usage: auth <login|logout|status>")
@@ -402,7 +417,7 @@ func (d *dependencies) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("refresh complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+		fmt.Printf("refresh complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 		return nil
 	case "import":
 		if len(args) < 2 {
@@ -442,6 +457,7 @@ func (d *dependencies) run(args []string) error {
 				}
 				fmt.Printf("imported: %d\n", res.ImportResult.Imported)
 				fmt.Printf("skipped: %d\n", res.ImportResult.Skipped)
+				fmt.Printf("watchlist_added: %d\n", res.WatchlistAdded)
 				for _, e := range res.ImportResult.Errors {
 					fmt.Println("-", e)
 				}
@@ -499,7 +515,7 @@ func onboardingImport(csvSvc *service.CSVService, syncSvc *service.LetterboxdSyn
 		if err == nil && status != "not_logged_in" && status != "expired" {
 			res, ran, err := syncSvc.SyncAndImportIfDue(context.Background())
 			if err == nil && ran {
-				fmt.Printf("Auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+				fmt.Printf("Auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 				return nil
 			}
 			if err != nil {
@@ -653,7 +669,7 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 		if err != nil {
 			return false, err
 		}
-		fmt.Printf("%srefresh complete:%s imported=%d skipped=%d\n", uiAccent, uiReset, res.ImportResult.Imported, res.ImportResult.Skipped)
+		fmt.Printf("%srefresh complete:%s imported=%d skipped=%d watchlist_added=%d\n", uiAccent, uiReset, res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 	case "watched":
 		return false, d.showWatched(ctx, 20)
 	case "ratings":
@@ -881,43 +897,46 @@ const (
 	uiStrong = "\x1b[1m"
 )
 
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
 func printUIBanner() {
-	fmt.Println(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
-	fmt.Printf("%s┃%s %sLETTERBOXD OPERATIONS CONSOLE%s%s  %sData • Analytics • Curation%s %s┃%s\n",
-		uiPanel, uiReset, uiStrong, uiAccent, uiReset, uiDim, uiReset, uiPanel, uiReset)
-	fmt.Printf("%s┃%s %sSession:%s interactive shell  %sMode:%s production-grade TUI            %s┃%s\n",
-		uiPanel, uiReset, uiDim, uiReset, uiDim, uiReset, uiPanel, uiReset)
-	fmt.Println(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
+	printCenteredLine(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
+	printCenteredLine(fmt.Sprintf("%s┃%s %sLETTERBOXD OPERATIONS CONSOLE%s%s  %sData • Analytics • Curation%s %s┃%s",
+		uiPanel, uiReset, uiStrong, uiAccent, uiReset, uiDim, uiReset, uiPanel, uiReset))
+	printCenteredLine(fmt.Sprintf("%s┃%s %sSession:%s interactive shell  %sMode:%s production-grade TUI            %s┃%s",
+		uiPanel, uiReset, uiDim, uiReset, uiDim, uiReset, uiPanel, uiReset))
+	printCenteredLine(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
 }
 
 func printUIHelp() {
-	fmt.Println(uiDim + "Command Palette" + uiReset)
-	fmt.Println("  data:      watched | ratings | reviews | heatmap | stats | refresh")
-	fmt.Println("  watchlist: watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
-	fmt.Println("  lists:     lists | lists create <name> | lists add <list-id> <title> [--notes text] | lists view <list-id>")
-	fmt.Println("  system:    clear | help | exit")
+	printCenteredLine(uiDim + "Command Palette" + uiReset)
+	printCenteredLine("  data:      watched | ratings | reviews | heatmap | stats | refresh")
+	printCenteredLine("  watchlist: watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
+	printCenteredLine("  lists:     lists | lists create <name> | lists add <list-id> <title> [--notes text] | lists view <list-id>")
+	printCenteredLine("  system:    clear | help | exit")
 }
 
 func printUICard(title string, subtitle string, lines []string, color string) {
 	innerWidth := 74
 	top := "┌" + strings.Repeat("─", innerWidth) + "┐"
 	bottom := "└" + strings.Repeat("─", innerWidth) + "┘"
-	fmt.Printf("\n%s%s%s\n", uiPanel, top, uiReset)
-	fmt.Printf("%s│%s %s%s%s\n", uiPanel, uiReset, uiStrong, clipText(title, innerWidth-1), uiReset)
+	fmt.Println()
+	printCenteredLine(uiPanel + top + uiReset)
+	printCenteredLine(fmt.Sprintf("%s│%s %s%s%s", uiPanel, uiReset, uiStrong, clipText(title, innerWidth-1), uiReset))
 	if subtitle != "" {
-		fmt.Printf("%s│%s %s%s\n", uiPanel, uiReset, uiDim, clipText(subtitle, innerWidth-1)+uiReset)
-		fmt.Printf("%s│%s %s\n", uiPanel, uiReset, strings.Repeat("·", innerWidth-1))
+		printCenteredLine(fmt.Sprintf("%s│%s %s%s", uiPanel, uiReset, uiDim, clipText(subtitle, innerWidth-1)+uiReset))
+		printCenteredLine(fmt.Sprintf("%s│%s %s", uiPanel, uiReset, strings.Repeat("·", innerWidth-1)))
 	}
 	if len(lines) == 0 {
-		fmt.Printf("%s│%s %s(no data)%s\n", uiPanel, uiReset, uiRose, uiReset)
-		fmt.Printf("%s%s%s\n", uiPanel, bottom, uiReset)
+		printCenteredLine(fmt.Sprintf("%s│%s %s(no data)%s", uiPanel, uiReset, uiRose, uiReset))
+		printCenteredLine(uiPanel + bottom + uiReset)
 		return
 	}
 	for _, line := range lines {
 		padded := padRight(clipText(line, innerWidth-1), innerWidth-1)
-		fmt.Printf("%s│%s %s%s\n", uiPanel, uiReset, color, padded+uiReset)
+		printCenteredLine(fmt.Sprintf("%s│%s %s%s", uiPanel, uiReset, color, padded+uiReset))
 	}
-	fmt.Printf("%s%s%s\n", uiPanel, bottom, uiReset)
+	printCenteredLine(uiPanel + bottom + uiReset)
 }
 
 func printStatsCard(stt domain.YearStats) {
@@ -966,6 +985,30 @@ func clipText(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+func printCenteredLine(s string) {
+	width := terminalWidth()
+	padding := (width - visibleLen(s)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	fmt.Print(strings.Repeat(" ", padding))
+	fmt.Println(s)
+}
+
+func terminalWidth() int {
+	if c := strings.TrimSpace(os.Getenv("COLUMNS")); c != "" {
+		if v, err := strconv.Atoi(c); err == nil && v > 40 {
+			return v
+		}
+	}
+	return 110
+}
+
+func visibleLen(s string) int {
+	clean := ansiEscapePattern.ReplaceAllString(s, "")
+	return len(clean)
 }
 
 func parseTitleWithOptionalNotes(args []string, start int) (string, *string, error) {

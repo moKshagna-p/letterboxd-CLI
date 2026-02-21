@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"film-heatmap/internal/domain"
 	"film-heatmap/internal/store/sqlite"
@@ -25,6 +26,36 @@ func (s *LibraryService) ListWatchlist(ctx context.Context) ([]domain.WatchlistI
 
 func (s *LibraryService) RemoveWatchlist(ctx context.Context, id string) error {
 	return s.store.DeleteWatchlistItem(ctx, id)
+}
+
+func (s *LibraryService) SyncWatchlistTitles(ctx context.Context, titles []string) (int, error) {
+	existing, err := s.store.ListWatchlistItems(ctx)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]struct{}{}
+	for _, item := range existing {
+		k := strings.ToLower(strings.TrimSpace(item.Title))
+		if k != "" {
+			seen[k] = struct{}{}
+		}
+	}
+	added := 0
+	for _, title := range titles {
+		k := strings.ToLower(strings.TrimSpace(title))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		if _, err := s.store.AddWatchlistItem(ctx, domain.AddWatchlistInput{Title: strings.TrimSpace(title)}); err != nil {
+			return added, err
+		}
+		seen[k] = struct{}{}
+		added++
+	}
+	return added, nil
 }
 
 func (s *LibraryService) AddList(ctx context.Context, input domain.AddFilmListInput) (domain.FilmList, error) {

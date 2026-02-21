@@ -21,7 +21,9 @@ film-heatmap
 ## Behavior you asked for
 - Auto-sync uses browser-auth flow (no password stored in app).
 - `auth login` opens Letterboxd sign-in in your browser.
+- During `auth login`, you can set your Letterboxd username for watchlist fallback sync.
 - `refresh` or `import letterboxd --auto` opens the export page and waits for a newly downloaded ZIP, then imports it.
+- Watchlist sync source order: `watchlist.csv` from export ZIP, then public watchlist page scrape fallback.
 - Browser auth remains valid for 1 hour after login.
 - Auto-sync checks run at most once per hour.
 - After a successful auto import, the detected export ZIP is deleted automatically.

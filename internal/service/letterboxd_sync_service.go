@@ -1,12 +1,18 @@
 package service
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -18,6 +24,7 @@ const (
 
 type LetterboxdSyncService struct {
 	csvSvc *CSVService
+	lib    *LibraryService
 	config *AppConfigService
 	dl     LetterboxdExportDownloader
 	now    func() time.Time
@@ -39,12 +46,13 @@ type LetterboxdExportDownloader interface {
 }
 
 type SyncImportResult struct {
-	ImportResult CSVImportResult
-	ExportHash   string
+	ImportResult   CSVImportResult
+	ExportHash     string
+	WatchlistAdded int
 }
 
-func NewLetterboxdSyncService(csvSvc *CSVService, config *AppConfigService, dl LetterboxdExportDownloader) *LetterboxdSyncService {
-	return &LetterboxdSyncService{csvSvc: csvSvc, config: config, dl: dl, now: time.Now}
+func NewLetterboxdSyncService(csvSvc *CSVService, lib *LibraryService, config *AppConfigService, dl LetterboxdExportDownloader) *LetterboxdSyncService {
+	return &LetterboxdSyncService{csvSvc: csvSvc, lib: lib, config: config, dl: dl, now: time.Now}
 }
 
 func (s *LetterboxdSyncService) Enabled() (bool, error) {
@@ -85,6 +93,23 @@ func (s *LetterboxdSyncService) InvalidateBrowserSession() error {
 	cfg.BrowserAuthEnabled = false
 	cfg.AuthExpiresAt = ""
 	return s.config.Save(cfg)
+}
+
+func (s *LetterboxdSyncService) SetUsername(username string) error {
+	cfg, err := s.config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.LetterboxdUsername = strings.TrimSpace(username)
+	return s.config.Save(cfg)
+}
+
+func (s *LetterboxdSyncService) Username() (string, error) {
+	cfg, err := s.config.Load()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(cfg.LetterboxdUsername), nil
 }
 
 func (s *LetterboxdSyncService) CredentialStatus() (string, error) {
@@ -197,7 +222,8 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 			return SyncImportResult{}, err
 		}
 		_ = removeSourceZip(dlRes.SourcePath)
-		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash}, nil
+		watchAdded, _ := s.syncWatchlist(ctx, dlRes.ImportPath, strings.TrimSpace(cfg.LetterboxdUsername))
+		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash, WatchlistAdded: watchAdded}, nil
 	}
 
 	res, err := s.csvSvc.ImportLetterboxd(ctx, dlRes.ImportPath)
@@ -211,8 +237,9 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 	if err := s.config.Save(cfg); err != nil {
 		return SyncImportResult{}, err
 	}
+	watchAdded, _ := s.syncWatchlist(ctx, dlRes.ImportPath, strings.TrimSpace(cfg.LetterboxdUsername))
 	_ = removeSourceZip(dlRes.SourcePath)
-	return SyncImportResult{ImportResult: res, ExportHash: hash}, nil
+	return SyncImportResult{ImportResult: res, ExportHash: hash, WatchlistAdded: watchAdded}, nil
 }
 
 func fileSHA256(path string) (string, error) {
@@ -256,4 +283,131 @@ func removeSourceZip(path string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *LetterboxdSyncService) syncWatchlist(ctx context.Context, zipPath string, username string) (int, error) {
+	if s.lib == nil {
+		return 0, nil
+	}
+	titles, err := parseWatchlistFromExportZip(zipPath)
+	if err != nil {
+		return 0, err
+	}
+	if len(titles) == 0 && username != "" {
+		titles, _ = scrapeLetterboxdWatchlist(username)
+	}
+	if len(titles) == 0 {
+		return 0, nil
+	}
+	return s.lib.SyncWatchlistTitles(ctx, titles)
+}
+
+func parseWatchlistFromExportZip(zipPath string) ([]string, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		name := strings.ToLower(filepath.Base(f.Name))
+		if name != "watchlist.csv" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		return parseWatchlistCSV(rc)
+	}
+	return nil, nil
+}
+
+func parseWatchlistCSV(r io.Reader) ([]string, error) {
+	cr := csv.NewReader(r)
+	head, err := cr.Read()
+	if err != nil {
+		return nil, err
+	}
+	idx := -1
+	for i, h := range head {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "name" || h == "title" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, nil
+	}
+	var titles []string
+	for {
+		row, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if idx >= len(row) {
+			continue
+		}
+		title := strings.TrimSpace(row[idx])
+		if title != "" {
+			titles = append(titles, title)
+		}
+	}
+	return uniqueTitles(titles), nil
+}
+
+func scrapeLetterboxdWatchlist(username string) ([]string, error) {
+	u := fmt.Sprintf("https://letterboxd.com/%s/watchlist/", strings.TrimSpace(username))
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "film-heatmap/1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("watchlist page: %s", resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	html := string(b)
+	re := regexp.MustCompile(`data-film-name=\"([^\"]+)\"`)
+	matches := re.FindAllStringSubmatch(html, -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		t := strings.TrimSpace(m[1])
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return uniqueTitles(out), nil
+}
+
+func uniqueTitles(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		k := strings.ToLower(strings.TrimSpace(t))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, strings.TrimSpace(t))
+	}
+	return out
 }

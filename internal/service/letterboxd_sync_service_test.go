@@ -77,7 +77,7 @@ func TestLetterboxdSyncServiceSyncAndImport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	syncSvc := NewLetterboxdSyncService(csvSvc, cfgSvc, &fakeDownloader{zipPath: zipPath, sourceZipPath: sourceZip})
+	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{zipPath: zipPath, sourceZipPath: sourceZip})
 	now := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
 	syncSvc.now = func() time.Time { return now }
 
@@ -136,7 +136,7 @@ func TestLetterboxdSyncServiceSyncAndImportIfDue(t *testing.T) {
 	if err := writeDiaryZip(zipPath); err != nil {
 		t.Fatal(err)
 	}
-	syncSvc := NewLetterboxdSyncService(csvSvc, cfgSvc, &fakeDownloader{zipPath: zipPath})
+	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{zipPath: zipPath})
 	base := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
 	syncSvc.now = func() time.Time { return base }
 
@@ -177,7 +177,7 @@ func TestLetterboxdSyncServiceExpiredAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	syncSvc := NewLetterboxdSyncService(csvSvc, cfgSvc, &fakeDownloader{})
+	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{})
 	now := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
 	syncSvc.now = func() time.Time { return now }
 
