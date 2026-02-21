@@ -4,7 +4,7 @@ Local-first film logging and GitHub-style daily heatmap.
 
 ## Quick start
 ```bash
-cd /Users/mokshagna/Desktop/Projects/film-heatmap
+cd path_of_the_file
 make test
 make install-local
 export PATH="$PWD/bin:$PATH"
