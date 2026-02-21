@@ -41,12 +41,15 @@ func RunAuto(args []string) error {
 	}
 
 	ctx := context.Background()
+	if err := deps.autoSyncIfConfigured(ctx); err != nil {
+		fmt.Println("auto-sync skipped:", err)
+	}
 	rows, err := deps.logs.List(ctx, domain.ListFilter{})
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		if err := onboardingImport(deps.csvSvc); err != nil {
+		if err := onboardingImport(deps.csvSvc, deps.syncSvc); err != nil {
 			return err
 		}
 	}
@@ -55,12 +58,14 @@ func RunAuto(args []string) error {
 }
 
 type dependencies struct {
-	store  *store.Store
-	logs   *service.LogService
-	heat   *service.HeatmapService
-	stats  *service.StatsService
-	csvSvc *service.CSVService
-	lib    *service.LibraryService
+	store   *store.Store
+	logs    *service.LogService
+	heat    *service.HeatmapService
+	stats   *service.StatsService
+	csvSvc  *service.CSVService
+	lib     *service.LibraryService
+	cfgSvc  *service.AppConfigService
+	syncSvc *service.LetterboxdSyncService
 }
 
 func (d *dependencies) close() {
@@ -77,14 +82,48 @@ func newDeps() (*dependencies, error) {
 		return nil, err
 	}
 	logs := service.NewLogService(st)
+	csvSvc := service.NewCSVService(logs)
+	cfgSvc, err := service.NewAppConfigService()
+	if err != nil {
+		return nil, err
+	}
+	downloader, err := service.NewLetterboxdDownloader()
+	if err != nil {
+		return nil, err
+	}
 	return &dependencies{
-		store:  st,
-		logs:   logs,
-		heat:   service.NewHeatmapService(st),
-		stats:  service.NewStatsService(st),
-		csvSvc: service.NewCSVService(logs),
-		lib:    service.NewLibraryService(st),
+		store:   st,
+		logs:    logs,
+		heat:    service.NewHeatmapService(st),
+		stats:   service.NewStatsService(st),
+		csvSvc:  csvSvc,
+		lib:     service.NewLibraryService(st),
+		cfgSvc:  cfgSvc,
+		syncSvc: service.NewLetterboxdSyncService(csvSvc, cfgSvc, downloader),
 	}, nil
+}
+
+func (d *dependencies) autoSyncIfConfigured(ctx context.Context) error {
+	enabled, err := d.syncSvc.Enabled()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	status, err := d.syncSvc.CredentialStatus()
+	if err != nil {
+		return err
+	}
+	if status == "not_logged_in" {
+		return errors.New("browser auth unavailable")
+	}
+	res, err := d.syncSvc.SyncAndImport(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+	return nil
 }
 
 func (d *dependencies) run(args []string) error {
@@ -94,6 +133,21 @@ func (d *dependencies) run(args []string) error {
 	}
 	ctx := context.Background()
 	switch args[0] {
+	case "help":
+		if len(args) == 1 {
+			printUsage()
+			return nil
+		}
+		switch strings.ToLower(args[1]) {
+		case "backend":
+			printBackendHelp()
+			return nil
+		case "features":
+			printFeatureHelp()
+			return nil
+		default:
+			return errors.New("usage: help [backend|features]")
+		}
 	case "add":
 		fs := flag.NewFlagSet("add", flag.ContinueOnError)
 		title := fs.String("title", "", "film title")
@@ -214,6 +268,9 @@ func (d *dependencies) run(args []string) error {
 		fmt.Println("deleted", *id)
 		return nil
 	case "heatmap":
+		if err := d.autoSyncIfConfigured(ctx); err != nil {
+			fmt.Println("auto-sync skipped:", err)
+		}
 		fs := flag.NewFlagSet("heatmap", flag.ContinueOnError)
 		year := fs.Int("year", 0, "year")
 		recentWeeks := fs.Int("recent-weeks", 53, "show rolling recent weeks ending now")
@@ -250,9 +307,77 @@ func (d *dependencies) run(args []string) error {
 		fmt.Printf("longest_streak: %d\n", stt.LongestStreak)
 		fmt.Printf("current_streak: %d\n", stt.CurrentStreak)
 		return nil
+	case "auth":
+		if len(args) < 2 {
+			return errors.New("usage: auth <login|logout|status> [--enable-auto-sync]")
+		}
+		switch args[1] {
+		case "login":
+			fs := flag.NewFlagSet("auth login", flag.ContinueOnError)
+			enableAutoSync := fs.Bool("enable-auto-sync", true, "enable automatic Letterboxd sync on launch")
+			if err := fs.Parse(args[2:]); err != nil {
+				return err
+			}
+			r := bufio.NewReader(os.Stdin)
+			for {
+				fmt.Println("Opening browser to Letterboxd sign-in...")
+				if err := d.syncSvc.ValidateCredentials(context.Background(), service.LetterboxdCredentials{}); err != nil {
+					return err
+				}
+				fmt.Println("After signing in successfully in your browser, press Enter to continue.")
+				_, _ = r.ReadString('\n')
+				fmt.Print("Did login succeed in browser? [y/N]: ")
+				ans, _ := r.ReadString('\n')
+				ans = strings.ToLower(strings.TrimSpace(ans))
+				if ans == "y" || ans == "yes" {
+					break
+				}
+			}
+			if err := d.syncSvc.SetBrowserAuthConfigured(true); err != nil {
+				return err
+			}
+			if err := d.syncSvc.SetEnabled(*enableAutoSync); err != nil {
+				return err
+			}
+			fmt.Println("browser auth configured")
+			fmt.Printf("auto-sync enabled: %t\n", *enableAutoSync)
+			return nil
+		case "logout":
+			if err := d.syncSvc.SetBrowserAuthConfigured(false); err != nil {
+				return err
+			}
+			fmt.Println("logged out from app session (browser auth disabled)")
+			return nil
+		case "status":
+			status, err := d.syncSvc.CredentialStatus()
+			if err != nil {
+				return err
+			}
+			enabled, err := d.syncSvc.Enabled()
+			if err != nil {
+				return err
+			}
+			fmt.Println("auto-sync enabled:", enabled)
+			switch status {
+			case "not_logged_in":
+				fmt.Println("browser auth: not configured")
+			default:
+				fmt.Println("browser auth:", status)
+			}
+			return nil
+		default:
+			return errors.New("usage: auth <login|logout|status>")
+		}
+	case "refresh":
+		res, err := d.syncSvc.SyncAndImport(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("refresh complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+		return nil
 	case "import":
 		if len(args) < 2 {
-			return errors.New("usage: import <csv|letterboxd> --file <path>")
+			return errors.New("usage: import <csv|letterboxd> [--file <path> | --auto]")
 		}
 		switch args[1] {
 		case "csv":
@@ -277,11 +402,24 @@ func (d *dependencies) run(args []string) error {
 		case "letterboxd":
 			fs := flag.NewFlagSet("import letterboxd", flag.ContinueOnError)
 			file := fs.String("file", "", "path to Letterboxd export zip or diary csv")
+			auto := fs.Bool("auto", false, "fetch latest Letterboxd export using browser-auth flow")
 			if err := fs.Parse(args[2:]); err != nil {
 				return err
 			}
+			if *auto {
+				res, err := d.syncSvc.SyncAndImport(ctx)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("imported: %d\n", res.ImportResult.Imported)
+				fmt.Printf("skipped: %d\n", res.ImportResult.Skipped)
+				for _, e := range res.ImportResult.Errors {
+					fmt.Println("-", e)
+				}
+				return nil
+			}
 			if *file == "" {
-				return errors.New("--file is required")
+				return errors.New("--file is required unless --auto is set")
 			}
 			res, err := d.csvSvc.ImportLetterboxd(ctx, *file)
 			if err != nil {
@@ -294,7 +432,7 @@ func (d *dependencies) run(args []string) error {
 			}
 			return nil
 		default:
-			return errors.New("usage: import <csv|letterboxd> --file <path>")
+			return errors.New("usage: import <csv|letterboxd> [--file <path> | --auto]")
 		}
 	case "export":
 		if len(args) < 2 || args[1] != "csv" {
@@ -324,8 +462,20 @@ func (d *dependencies) run(args []string) error {
 	}
 }
 
-func onboardingImport(csvSvc *service.CSVService) error {
+func onboardingImport(csvSvc *service.CSVService, syncSvc *service.LetterboxdSyncService) error {
 	fmt.Println("No logs found. Import your Letterboxd data to get started.")
+	fmt.Println("We'll try auto-sync first when browser auth is configured.")
+	if syncSvc != nil {
+		status, err := syncSvc.CredentialStatus()
+		if err == nil && status != "not_logged_in" {
+			res, err := syncSvc.SyncAndImport(context.Background())
+			if err == nil {
+				fmt.Printf("Auto-import complete: imported=%d skipped=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped)
+				return nil
+			}
+			fmt.Println("Auto-sync failed:", err)
+		}
+	}
 	fmt.Println("Export from Letterboxd and provide either the export ZIP or diary CSV path.")
 	r := bufio.NewReader(os.Stdin)
 	for {
@@ -467,6 +617,12 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 			return false, err
 		}
 		printStatsCard(st)
+	case "refresh":
+		res, err := d.syncSvc.SyncAndImport(ctx)
+		if err != nil {
+			return false, err
+		}
+		fmt.Printf("%srefresh complete:%s imported=%d skipped=%d\n", uiAccent, uiReset, res.ImportResult.Imported, res.ImportResult.Skipped)
 	case "watched":
 		return false, d.showWatched(ctx, 20)
 	case "ratings":
@@ -708,6 +864,7 @@ func printUIHelp() {
 	fmt.Println("  lists view <list-id>")
 	fmt.Println("  heatmap                show heatmap")
 	fmt.Println("  stats                  show yearly stats")
+	fmt.Println("  refresh                fetch latest export via browser and import")
 	fmt.Println("  clear                  clear screen")
 	fmt.Println("  help                   show commands")
 	fmt.Println("  exit                   quit")
@@ -831,17 +988,46 @@ func padRight(s string, n int) string {
 }
 
 func printUsage() {
-	fmt.Println("film-heatmap commands:")
+	fmt.Println("film-heatmap help:")
+	fmt.Println("  help backend   backend/data commands")
+	fmt.Println("  help features  auth/sync commands")
+	fmt.Println("")
+	fmt.Println("quick commands:")
 	fmt.Println("  add --title --date [--rating --notes --rewatch]")
 	fmt.Println("  list [--from --to --title]")
 	fmt.Println("  edit --id [--title --date --rating --notes --rewatch]")
 	fmt.Println("  delete --id")
 	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
 	fmt.Println("  stats [--year]")
-	fmt.Println("  import csv --file")
-	fmt.Println("  import letterboxd --file")
-	fmt.Println("  export csv --file [--year]")
 	fmt.Println("  ui")
+}
+
+func printBackendHelp() {
+	fmt.Println("Backend/Data Commands:")
+	fmt.Println("  add --title --date [--rating --notes --rewatch]")
+	fmt.Println("  list [--from --to --title]")
+	fmt.Println("  edit --id [--title --date --rating --notes --rewatch]")
+	fmt.Println("  delete --id")
+	fmt.Println("  import csv --file <path>")
+	fmt.Println("  import letterboxd --file <path-to-zip-or-csv>")
+	fmt.Println("  export csv --file <path> [--year YYYY]")
+	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
+	fmt.Println("  stats [--year]")
+	fmt.Println("  ui")
+}
+
+func printFeatureHelp() {
+	fmt.Println("Feature/Sync Commands:")
+	fmt.Println("  auth login [--enable-auto-sync=true|false]")
+	fmt.Println("  auth status")
+	fmt.Println("  auth logout")
+	fmt.Println("  refresh")
+	fmt.Println("  import letterboxd --auto")
+	fmt.Println("")
+	fmt.Println("Account/session flow:")
+	fmt.Println("  1) Logout current app session: auth logout")
+	fmt.Println("  2) Login again via browser: auth login")
+	fmt.Println("  3) Refresh latest Letterboxd data: refresh (or import letterboxd --auto)")
 }
 
 func parseDateFlag(v string) (time.Time, error) {
