@@ -15,6 +15,7 @@ type AppConfig struct {
 	AuthExpiresAt       string `json:"auth_expires_at,omitempty"`
 	SyncCooldownUntil   string `json:"sync_cooldown_until,omitempty"`
 	LetterboxdUsername  string `json:"letterboxd_username,omitempty"`
+	LetterboxdPassword  string `json:"letterboxd_password,omitempty"`
 	CredentialsRef      string `json:"credentials_ref,omitempty"`
 	LastSyncAt          string `json:"last_sync_at,omitempty"`
 	LastExportHash      string `json:"last_export_hash,omitempty"`

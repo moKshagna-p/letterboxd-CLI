@@ -19,15 +19,15 @@ film-heatmap
 `film-heatmap` now opens an interactive CLI studio where you can type section commands.
 
 ## Behavior you asked for
-- Auto-sync uses browser-auth flow (no password stored in app).
-- `auth login` opens Letterboxd sign-in in your browser.
-- During `auth login`, you can set your Letterboxd username for watchlist fallback sync.
-- `refresh` or `import letterboxd --auto` opens the export page and waits for a newly downloaded ZIP, then imports it.
-- Watchlist sync source order: `watchlist.csv` from export ZIP, then public watchlist page scrape fallback.
-- Browser auth remains valid for 1 hour after login.
-- Auto-sync checks run at most once per hour.
-- After a successful auto import, the detected export ZIP is deleted automatically.
-- If auto-sync fails or browser auth is not configured, the app falls back to manual import (ZIP or diary CSV).
+- Auto-sync uses authenticated Letterboxd scraping (no repeated manual export download flow).
+- `auth login` asks for your Letterboxd username/password one time and validates them.
+- `refresh` or `import letterboxd --auto` scrapes diary data, compares to last fetch hash, and imports only if changed.
+- `lbstats` scrapes your Letterboxd account on demand and lets you choose which feature to view (`watched`, `reviews`, `watchlist`, `lists`, `tags`, `heatmap`, or all).
+- On first `lbstats` run, the app asks for username/password once, validates credentials, and stores them locally.
+- On later `lbstats` runs, it scrapes again and only refreshes cached feature data if content changed.
+- TUI data commands trigger sync checks automatically when auto-sync is enabled.
+- Watchlist sync uses public watchlist page scrape fallback.
+- If auto-sync is not configured, the app falls back to manual import (ZIP or diary CSV).
 - After import, `film-heatmap` opens the interactive CLI studio.
 
 ## Commands
@@ -43,6 +43,9 @@ film-heatmap auth login
 film-heatmap auth status
 film-heatmap auth logout
 film-heatmap refresh
+film-heatmap lbstats
+film-heatmap lbstats --view watched
+film-heatmap lbstats --view heatmap
 film-heatmap import letterboxd --auto
 film-heatmap import letterboxd --file /path/to/letterboxd-export.zip
 film-heatmap import csv --file /path/to/logs.csv
@@ -55,7 +58,7 @@ film-heatmap dedupe
 # Logout current app session
 film-heatmap auth logout
 
-# Login via browser
+# Login once with credentials
 film-heatmap auth login
 
 # Refresh latest data now
@@ -68,6 +71,7 @@ Inside `film-heatmap` or `film-heatmap ui`:
 watched
 ratings
 reviews
+lbstats
 watchlist
 watchlist add "Chungking Express" --notes "Weekend"
 watchlist rm <item-id>

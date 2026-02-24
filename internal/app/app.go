@@ -63,6 +63,7 @@ type dependencies struct {
 	logs    *service.LogService
 	heat    *service.HeatmapService
 	stats   *service.StatsService
+	lbStats *service.LetterboxdStatsService
 	csvSvc  *service.CSVService
 	lib     *service.LibraryService
 	cfgSvc  *service.AppConfigService
@@ -98,6 +99,7 @@ func newDeps() (*dependencies, error) {
 		logs:    logs,
 		heat:    service.NewHeatmapService(st),
 		stats:   service.NewStatsService(st),
+		lbStats: service.NewLetterboxdStatsService(cfgSvc, downloader),
 		csvSvc:  csvSvc,
 		lib:     libSvc,
 		cfgSvc:  cfgSvc,
@@ -118,10 +120,10 @@ func (d *dependencies) autoSyncIfConfigured(ctx context.Context) error {
 		return err
 	}
 	if status == "not_logged_in" {
-		return errors.New("browser auth unavailable")
+		return nil
 	}
 	if status == "expired" {
-		return errors.New("browser auth expired")
+		return nil
 	}
 	res, ran, err := d.syncSvc.SyncAndImportIfDue(ctx)
 	if err != nil {
@@ -322,6 +324,13 @@ func (d *dependencies) run(args []string) error {
 		fmt.Printf("longest_streak: %d\n", stt.LongestStreak)
 		fmt.Printf("current_streak: %d\n", stt.CurrentStreak)
 		return nil
+	case "lbstats":
+		fs := flag.NewFlagSet("lbstats", flag.ContinueOnError)
+		view := fs.String("view", "", "one of: watched,reviews,watchlist,lists,tags,all")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return d.runLBStats(ctx, strings.TrimSpace(strings.ToLower(*view)))
 	case "auth":
 		if len(args) < 2 {
 			return errors.New("usage: auth <login|logout|status> [--enable-auto-sync]")
@@ -334,40 +343,32 @@ func (d *dependencies) run(args []string) error {
 				return err
 			}
 			r := bufio.NewReader(os.Stdin)
-			for {
-				fmt.Println("Opening browser to Letterboxd sign-in...")
-				if err := d.syncSvc.ValidateCredentials(context.Background(), service.LetterboxdCredentials{}); err != nil {
-					return err
-				}
-				fmt.Println("After signing in successfully in your browser, press Enter to continue.")
-				_, _ = r.ReadString('\n')
-				fmt.Print("Did login succeed in browser? [y/N]: ")
-				ans, _ := r.ReadString('\n')
-				ans = strings.ToLower(strings.TrimSpace(ans))
-				if ans == "y" || ans == "yes" {
-					break
-				}
+			fmt.Print("Letterboxd username: ")
+			username, _ := r.ReadString('\n')
+			username = strings.TrimSpace(username)
+			password, err := readPasswordPrompt("Letterboxd password: ")
+			if err != nil {
+				return err
 			}
-			if err := d.syncSvc.ActivateBrowserSession(time.Hour); err != nil {
+			creds := service.LetterboxdCredentials{Username: username, Password: password}
+			fmt.Println("Validating credentials against Letterboxd...")
+			if err := d.syncSvc.ValidateCredentials(context.Background(), creds); err != nil {
+				return err
+			}
+			if err := d.syncSvc.SetCredentials(creds); err != nil {
 				return err
 			}
 			if err := d.syncSvc.SetEnabled(*enableAutoSync); err != nil {
 				return err
 			}
-			fmt.Print("Letterboxd username (for watchlist sync fallback): ")
-			username, _ := r.ReadString('\n')
-			username = strings.TrimSpace(username)
-			if err := d.syncSvc.SetUsername(username); err != nil {
-				return err
-			}
-			fmt.Println("browser auth configured")
+			fmt.Println("credentials configured")
 			fmt.Printf("auto-sync enabled: %t\n", *enableAutoSync)
 			return nil
 		case "logout":
 			if err := d.syncSvc.InvalidateBrowserSession(); err != nil {
 				return err
 			}
-			fmt.Println("logged out from app session (browser auth disabled)")
+			fmt.Println("credentials cleared from app config")
 			return nil
 		case "status":
 			status, err := d.syncSvc.CredentialStatus()
@@ -389,11 +390,11 @@ func (d *dependencies) run(args []string) error {
 			fmt.Println("auto-sync enabled:", enabled)
 			switch status {
 			case "not_logged_in":
-				fmt.Println("browser auth: not configured")
+				fmt.Println("credentials: not configured")
 			case "expired":
-				fmt.Println("browser auth: expired")
+				fmt.Println("credentials: expired browser session")
 			default:
-				fmt.Println("browser auth:", status)
+				fmt.Println("credentials:", status)
 			}
 			if expiresAt != nil {
 				fmt.Println("auth expires at:", expiresAt.In(time.Local).Format(time.RFC3339))
@@ -406,7 +407,7 @@ func (d *dependencies) run(args []string) error {
 				return err
 			}
 			if username != "" {
-				fmt.Println("watchlist username:", username)
+				fmt.Println("letterboxd username:", username)
 			}
 			return nil
 		default:
@@ -594,6 +595,130 @@ func normalizePromptPath(raw string) string {
 	return b.String()
 }
 
+func readPasswordPrompt(prompt string) (string, error) {
+	fmt.Print(prompt)
+	r := bufio.NewReader(os.Stdin)
+	pw, err := r.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(pw), nil
+}
+
+func (d *dependencies) ensureLetterboxdCredentials(ctx context.Context) (service.LetterboxdCredentials, error) {
+	creds, err := d.syncSvc.Credentials()
+	if err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	if strings.TrimSpace(creds.Username) != "" && strings.TrimSpace(creds.Password) != "" {
+		return creds, nil
+	}
+	r := bufio.NewReader(os.Stdin)
+	fmt.Println("No Letterboxd credentials configured. Set them now.")
+	fmt.Print("Letterboxd username: ")
+	username, _ := r.ReadString('\n')
+	username = strings.TrimSpace(username)
+	password, err := readPasswordPrompt("Letterboxd password: ")
+	if err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	creds = service.LetterboxdCredentials{Username: username, Password: password}
+	fmt.Println("Validating credentials against Letterboxd...")
+	if err := d.syncSvc.ValidateCredentials(ctx, creds); err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	if err := d.syncSvc.SetCredentials(creds); err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	return creds, nil
+}
+
+func (d *dependencies) selectLBView(initial string) (string, error) {
+	if initial != "" {
+		switch initial {
+		case "watched", "reviews", "watchlist", "lists", "tags", "heatmap", "all":
+			return initial, nil
+		default:
+			return "", errors.New("invalid --view; use watched,reviews,watchlist,lists,tags,heatmap,all")
+		}
+	}
+	fmt.Println("Select what to show:")
+	fmt.Println("1) watched")
+	fmt.Println("2) reviews")
+	fmt.Println("3) watchlist")
+	fmt.Println("4) lists")
+	fmt.Println("5) tags")
+	fmt.Println("6) heatmap")
+	fmt.Println("7) all")
+	fmt.Print("Choose [1-7]: ")
+	r := bufio.NewReader(os.Stdin)
+	raw, _ := r.ReadString('\n')
+	switch strings.TrimSpace(raw) {
+	case "1":
+		return "watched", nil
+	case "2":
+		return "reviews", nil
+	case "3":
+		return "watchlist", nil
+	case "4":
+		return "lists", nil
+	case "5":
+		return "tags", nil
+	case "6":
+		return "heatmap", nil
+	case "7", "":
+		return "all", nil
+	default:
+		return "", errors.New("invalid selection")
+	}
+}
+
+func (d *dependencies) runLBStats(ctx context.Context, view string) error {
+	creds, err := d.ensureLetterboxdCredentials(ctx)
+	if err != nil {
+		return err
+	}
+	view, err = d.selectLBView(view)
+	if err != nil {
+		return err
+	}
+	if _, err := d.syncSvc.SyncAndImport(ctx); err != nil {
+		fmt.Println("sync warning:", err)
+	}
+	res, scrapeErr := d.lbStats.SyncAndLoad(ctx, creds)
+	if scrapeErr != nil {
+		fmt.Println("scrape warning:", scrapeErr)
+		fmt.Println("showing cached data when available")
+	}
+	printFeature := func(name string, fr service.LBFeatureResult) {
+		if view != "all" && view != name {
+			return
+		}
+		fmt.Printf("\n[%s] source=%s changed=%t count=%d\n", name, fr.Source, fr.Changed, len(fr.Items))
+		limit := min(20, len(fr.Items))
+		for i := 0; i < limit; i++ {
+			fmt.Printf("%2d. %s\n", i+1, fr.Items[i])
+		}
+		if len(fr.Items) > limit {
+			fmt.Printf("... +%d more\n", len(fr.Items)-limit)
+		}
+	}
+	printFeature("watched", res.Watched)
+	printFeature("reviews", res.Reviews)
+	printFeature("watchlist", res.Watchlist)
+	printFeature("lists", res.Lists)
+	printFeature("tags", res.Tags)
+	if view == "all" || view == "heatmap" {
+		hm, err := d.heat.RecentWeeks(ctx, 53, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Println()
+		printHeatmap(hm)
+	}
+	return nil
+}
+
 func hasDiaryCSV(zipPath string) (bool, error) {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -645,6 +770,13 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 		return false, nil
 	}
 	switch args[0] {
+	case "help", "clear", "exit", "quit", "q":
+	default:
+		if err := d.autoSyncIfConfigured(ctx); err != nil {
+			fmt.Println("auto-sync skipped:", err)
+		}
+	}
+	switch args[0] {
 	case "help":
 		printUIHelp()
 	case "clear":
@@ -664,6 +796,8 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 			return false, err
 		}
 		printStatsCard(st)
+	case "lbstats":
+		return false, d.runLBStats(ctx, "")
 	case "refresh":
 		res, err := d.syncSvc.SyncAndImport(ctx)
 		if err != nil {
@@ -910,7 +1044,7 @@ func printUIBanner() {
 
 func printUIHelp() {
 	printCenteredLine(uiDim + "Command Palette" + uiReset)
-	printCenteredLine("  data:      watched | ratings | reviews | heatmap | stats | refresh")
+	printCenteredLine("  data:      watched | ratings | reviews | heatmap | stats | lbstats | refresh")
 	printCenteredLine("  watchlist: watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
 	printCenteredLine("  lists:     lists | lists create <name> | lists add <list-id> <title> [--notes text] | lists view <list-id>")
 	printCenteredLine("  system:    clear | help | exit")
@@ -1116,6 +1250,7 @@ func printUsage() {
 	fmt.Println("  dedupe")
 	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
 	fmt.Println("  stats [--year]")
+	fmt.Println("  lbstats [--view watched|reviews|watchlist|lists|tags|heatmap|all]")
 	fmt.Println("  ui")
 }
 
@@ -1131,6 +1266,7 @@ func printBackendHelp() {
 	fmt.Println("  export csv --file <path> [--year YYYY]")
 	fmt.Println("  heatmap [--recent-weeks 53] [--year YYYY]")
 	fmt.Println("  stats [--year]")
+	fmt.Println("  lbstats [--view watched|reviews|watchlist|lists|tags|heatmap|all]")
 	fmt.Println("  ui")
 }
 
@@ -1141,16 +1277,17 @@ func printFeatureHelp() {
 	fmt.Println("  auth logout")
 	fmt.Println("  refresh")
 	fmt.Println("  import letterboxd --auto")
+	fmt.Println("  lbstats [--view watched|reviews|watchlist|lists|tags|heatmap|all]")
 	fmt.Println("")
 	fmt.Println("Timing rules:")
-	fmt.Println("  - browser auth session is valid for 1 hour after `auth login`")
-	fmt.Println("  - auto-sync checks run at most once per hour")
-	fmt.Println("  - successful auto import deletes the detected export zip from Downloads")
+	fmt.Println("  - auth login stores Letterboxd credentials once in local config")
+	fmt.Println("  - TUI commands trigger a quick scraper sync check before reading data")
+	fmt.Println("  - if no remote changes are found, cached local data is used")
 	fmt.Println("")
 	fmt.Println("Account/session flow:")
-	fmt.Println("  1) Logout current app session: auth logout")
-	fmt.Println("  2) Login again via browser: auth login")
-	fmt.Println("  3) Refresh latest Letterboxd data: refresh (or import letterboxd --auto)")
+	fmt.Println("  1) Configure credentials once: auth login")
+	fmt.Println("  2) Check status anytime: auth status")
+	fmt.Println("  3) Force pull latest data now: refresh (or import letterboxd --auto)")
 }
 
 func parseDateFlag(v string) (time.Time, error) {

@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultAuthSessionTTL = time.Hour
-	defaultSyncCooldown   = time.Hour
+	defaultSyncCooldown   = 0 * time.Second
 )
 
 type LetterboxdSyncService struct {
@@ -92,6 +92,21 @@ func (s *LetterboxdSyncService) InvalidateBrowserSession() error {
 	}
 	cfg.BrowserAuthEnabled = false
 	cfg.AuthExpiresAt = ""
+	cfg.LetterboxdPassword = ""
+	return s.config.Save(cfg)
+}
+
+func (s *LetterboxdSyncService) SetCredentials(creds LetterboxdCredentials) error {
+	cfg, err := s.config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.LetterboxdUsername = strings.TrimSpace(creds.Username)
+	cfg.LetterboxdPassword = creds.Password
+	if cfg.LetterboxdUsername != "" && cfg.LetterboxdPassword != "" {
+		cfg.BrowserAuthEnabled = true
+		cfg.AuthExpiresAt = ""
+	}
 	return s.config.Save(cfg)
 }
 
@@ -104,12 +119,23 @@ func (s *LetterboxdSyncService) SetUsername(username string) error {
 	return s.config.Save(cfg)
 }
 
-func (s *LetterboxdSyncService) Username() (string, error) {
+func (s *LetterboxdSyncService) Credentials() (LetterboxdCredentials, error) {
 	cfg, err := s.config.Load()
+	if err != nil {
+		return LetterboxdCredentials{}, err
+	}
+	return LetterboxdCredentials{
+		Username: strings.TrimSpace(cfg.LetterboxdUsername),
+		Password: cfg.LetterboxdPassword,
+	}, nil
+}
+
+func (s *LetterboxdSyncService) Username() (string, error) {
+	creds, err := s.Credentials()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(cfg.LetterboxdUsername), nil
+	return creds.Username, nil
 }
 
 func (s *LetterboxdSyncService) CredentialStatus() (string, error) {
@@ -117,8 +143,12 @@ func (s *LetterboxdSyncService) CredentialStatus() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !cfg.BrowserAuthEnabled {
+	credsSet := strings.TrimSpace(cfg.LetterboxdUsername) != "" && strings.TrimSpace(cfg.LetterboxdPassword) != ""
+	if !credsSet && !cfg.BrowserAuthEnabled {
 		return "not_logged_in", nil
+	}
+	if credsSet {
+		return "credentials_configured", nil
 	}
 	exp, ok := parseRFC3339(cfg.AuthExpiresAt)
 	if !ok || !exp.After(s.now()) {
@@ -180,8 +210,12 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 	if err != nil {
 		return SyncImportResult{}, err
 	}
-	if !isAuthValidAt(cfg, s.now()) {
-		return SyncImportResult{}, errors.New("browser auth is missing or expired; run `auth login`")
+	creds := LetterboxdCredentials{
+		Username: strings.TrimSpace(cfg.LetterboxdUsername),
+		Password: cfg.LetterboxdPassword,
+	}
+	if strings.TrimSpace(creds.Username) == "" || strings.TrimSpace(creds.Password) == "" {
+		return SyncImportResult{}, errors.New("letterboxd credentials missing; run `auth login`")
 	}
 	if !ignoreCooldown {
 		if until, ok := parseRFC3339(cfg.SyncCooldownUntil); ok && until.After(s.now()) {
@@ -199,7 +233,7 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 
 	var dlRes DownloadedExport
 	for attempt := 1; attempt <= 2; attempt++ {
-		dlRes, err = s.dl.DownloadLatestExport(ctx, LetterboxdCredentials{}, workDir)
+		dlRes, err = s.dl.DownloadLatestExport(ctx, creds, workDir)
 		if err == nil {
 			break
 		}
@@ -289,9 +323,13 @@ func (s *LetterboxdSyncService) syncWatchlist(ctx context.Context, zipPath strin
 	if s.lib == nil {
 		return 0, nil
 	}
-	titles, err := parseWatchlistFromExportZip(zipPath)
-	if err != nil {
-		return 0, err
+	var titles []string
+	var err error
+	if strings.EqualFold(filepath.Ext(zipPath), ".zip") {
+		titles, err = parseWatchlistFromExportZip(zipPath)
+		if err != nil {
+			return 0, err
+		}
 	}
 	if len(titles) == 0 && username != "" {
 		titles, _ = scrapeLetterboxdWatchlist(username)

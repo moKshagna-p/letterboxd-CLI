@@ -81,7 +81,7 @@ func TestLetterboxdSyncServiceSyncAndImport(t *testing.T) {
 	now := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
 	syncSvc.now = func() time.Time { return now }
 
-	if err := syncSvc.ActivateBrowserSession(time.Hour); err != nil {
+	if err := syncSvc.SetCredentials(LetterboxdCredentials{Username: "user", Password: "pw"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestLetterboxdSyncServiceSyncAndImport(t *testing.T) {
 	}
 }
 
-func TestLetterboxdSyncServiceSyncAndImportIfDue(t *testing.T) {
+func TestLetterboxdSyncServiceSyncAndImportIfDueRunsEachCall(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	t.Setenv("FILM_HEATMAP_CONFIG", cfgPath)
@@ -136,11 +136,15 @@ func TestLetterboxdSyncServiceSyncAndImportIfDue(t *testing.T) {
 	if err := writeDiaryZip(zipPath); err != nil {
 		t.Fatal(err)
 	}
-	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{zipPath: zipPath})
+	sourceZip := filepath.Join(dir, "downloaded-export-2.zip")
+	if err := copyTestFile(zipPath, sourceZip); err != nil {
+		t.Fatal(err)
+	}
+	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{zipPath: zipPath, sourceZipPath: sourceZip})
 	base := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
 	syncSvc.now = func() time.Time { return base }
 
-	if err := syncSvc.ActivateBrowserSession(time.Hour); err != nil {
+	if err := syncSvc.SetCredentials(LetterboxdCredentials{Username: "user", Password: "pw"}); err != nil {
 		t.Fatal(err)
 	}
 	_, ran, err := syncSvc.SyncAndImportIfDue(context.Background())
@@ -155,12 +159,12 @@ func TestLetterboxdSyncServiceSyncAndImportIfDue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ran {
-		t.Fatal("expected second sync to be skipped by cooldown")
+	if !ran {
+		t.Fatal("expected second sync check to run")
 	}
 }
 
-func TestLetterboxdSyncServiceExpiredAuth(t *testing.T) {
+func TestLetterboxdSyncServiceMissingCredentials(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	t.Setenv("FILM_HEATMAP_CONFIG", cfgPath)
@@ -178,23 +182,15 @@ func TestLetterboxdSyncServiceExpiredAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncSvc := NewLetterboxdSyncService(csvSvc, nil, cfgSvc, &fakeDownloader{})
-	now := time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC)
-	syncSvc.now = func() time.Time { return now }
-
-	if err := syncSvc.ActivateBrowserSession(10 * time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	syncSvc.now = func() time.Time { return now.Add(11 * time.Minute) }
-
 	if _, err := syncSvc.SyncAndImport(context.Background()); err == nil {
-		t.Fatal("expected error when auth expired")
+		t.Fatal("expected error when credentials are missing")
 	}
 	status, err := syncSvc.CredentialStatus()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status != "expired" {
-		t.Fatalf("expected expired status, got %q", status)
+	if status != "not_logged_in" {
+		t.Fatalf("expected not_logged_in status, got %q", status)
 	}
 }
 

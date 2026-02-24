@@ -1,195 +1,686 @@
 package service
 
 import (
-	"archive/zip"
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
+	"html"
 	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"sort"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 var (
-	ErrNoNewExportFound = errors.New("no new letterboxd export zip found")
+	ErrNoNewExportFound = errors.New("no diary entries found while scraping")
 )
 
-type LetterboxdDownloader struct{}
-
-func NewLetterboxdDownloader() (*LetterboxdDownloader, error) {
-	return &LetterboxdDownloader{}, nil
+type LetterboxdDownloader struct {
+	userAgent string
 }
 
-// DownloadLatestExport is browser-assisted:
-// 1) opens Letterboxd export page in browser
-// 2) waits for a newly downloaded zip in download dir
-// 3) copies that zip into outDir and returns both import copy and source zip path
-func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, _ LetterboxdCredentials, outDir string) (DownloadedExport, error) {
+type scrapedDiaryEntry struct {
+	Date     string
+	Title    string
+	Year     string
+	FilmPath string
+	Rating   string
+	Rewatch  bool
+}
+
+type LetterboxdSnapshot struct {
+	Watched   []string
+	Reviews   []string
+	Watchlist []string
+	Lists     []string
+	Tags      []string
+}
+
+func NewLetterboxdDownloader() (*LetterboxdDownloader, error) {
+	return &LetterboxdDownloader{userAgent: "film-heatmap/1.0 (+https://letterboxd.com)"}, nil
+}
+
+func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, creds LetterboxdCredentials, outDir string) (DownloadedExport, error) {
+	if err := validateScrapeCreds(creds); err != nil {
+		return DownloadedExport{}, err
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return DownloadedExport{}, err
 	}
-	downloadDir, err := resolveDownloadDir()
+
+	client, err := d.newClient()
 	if err != nil {
 		return DownloadedExport{}, err
 	}
-	before, err := snapshotZipFiles(downloadDir)
-	if err != nil {
-		return DownloadedExport{}, err
-	}
-	if err := openInBrowser("https://letterboxd.com/data/export/"); err != nil {
+	if _, err := d.loginOrFallback(ctx, client, creds); err != nil {
 		return DownloadedExport{}, err
 	}
 
-	deadline := time.Now().Add(2 * time.Minute)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return DownloadedExport{}, ctx.Err()
-		default:
-		}
-		zipPath, err := newestNewDiaryZip(downloadDir, before)
-		if err == nil {
-			out := filepath.Join(outDir, filepath.Base(zipPath))
-			if err := copyFile(zipPath, out); err != nil {
-				return DownloadedExport{}, err
-			}
-			return DownloadedExport{ImportPath: out, SourcePath: zipPath}, nil
-		}
-		time.Sleep(2 * time.Second)
+	entries, err := d.scrapeDiary(ctx, client, creds.Username)
+	if err != nil {
+		return DownloadedExport{}, err
 	}
-	return DownloadedExport{}, ErrNoNewExportFound
+	if len(entries) == 0 {
+		return DownloadedExport{}, ErrNoNewExportFound
+	}
+
+	out := filepath.Join(outDir, "letterboxd-diary-scrape.csv")
+	if err := writeScrapedDiaryCSV(out, entries); err != nil {
+		return DownloadedExport{}, err
+	}
+	return DownloadedExport{ImportPath: out, SourcePath: ""}, nil
 }
 
-// ValidateCredentials opens browser login and relies on browser-native auth validation.
-func (d *LetterboxdDownloader) ValidateCredentials(ctx context.Context, _ LetterboxdCredentials) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+func (d *LetterboxdDownloader) ValidateCredentials(ctx context.Context, creds LetterboxdCredentials) error {
+	if err := validateScrapeCreds(creds); err != nil {
+		return err
 	}
-	if err := openInBrowser("https://letterboxd.com/sign-in/"); err != nil {
+	client, err := d.newClient()
+	if err != nil {
+		return err
+	}
+	if _, err := d.loginOrFallback(ctx, client, creds); err != nil {
 		return err
 	}
 	return nil
 }
 
-func resolveDownloadDir() (string, error) {
-	if v := strings.TrimSpace(os.Getenv("FILM_HEATMAP_DOWNLOAD_DIR")); v != "" {
-		return v, nil
+func (d *LetterboxdDownloader) ScrapeSnapshot(ctx context.Context, creds LetterboxdCredentials) (LetterboxdSnapshot, error) {
+	if err := validateScrapeCreds(creds); err != nil {
+		return LetterboxdSnapshot{}, err
 	}
-	home, err := os.UserHomeDir()
+	client, err := d.newClient()
 	if err != nil {
-		return "", err
+		return LetterboxdSnapshot{}, err
 	}
-	return filepath.Join(home, "Downloads"), nil
+	if _, err := d.loginOrFallback(ctx, client, creds); err != nil {
+		return LetterboxdSnapshot{}, err
+	}
+	username := strings.TrimSpace(creds.Username)
+
+	entries, err := d.scrapeDiary(ctx, client, username)
+	if err != nil {
+		return LetterboxdSnapshot{}, err
+	}
+	watched := make([]string, 0, len(entries))
+	tagSet := map[string]struct{}{}
+	for _, e := range entries {
+		if e.Title == "" || e.Date == "" {
+			continue
+		}
+		rating := "-"
+		if strings.TrimSpace(e.Rating) != "" {
+			rating = strings.TrimSpace(e.Rating)
+		}
+		rewatch := ""
+		if e.Rewatch {
+			rewatch = " | rewatch"
+		}
+		watched = append(watched, fmt.Sprintf("%s | %s | rating:%s%s", e.Date, e.Title, rating, rewatch))
+	}
+
+	reviews, _ := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/films/reviews/", username), []string{
+		`data-film-name="([^"]+)"`,
+		`<h2[^>]*class="[^"]*headline[^"]*"[^>]*>\s*<a[^>]*>(.*?)</a>`,
+		`<img[^>]*alt="([^"]+)"[^>]*>`,
+	})
+	watchlist, _ := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/watchlist/", username), []string{
+		`data-film-name="([^"]+)"`,
+		`<img[^>]*alt="([^"]+)"[^>]*class="[^"]*image[^"]*"`,
+		`<img[^>]*alt="([^"]+)"[^>]*>`,
+	})
+	lists, _ := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/lists/", username), []string{
+		`<h2[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*>(.*?)</a>`,
+		`<a[^>]*href="/%s/list/[^"]+"[^>]*>(.*?)</a>`,
+	})
+	tagRaw, _ := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/tags/", username), []string{
+		`/%s/tag/([^"/]+)"`,
+		`/tag/([^"/]+)"`,
+	})
+	for _, t := range tagRaw {
+		t = strings.TrimSpace(strings.TrimPrefix(t, "#"))
+		if t == "" {
+			continue
+		}
+		tagSet[strings.ToLower(t)] = struct{}{}
+	}
+	tags := make([]string, 0, len(tagSet))
+	for t := range tagSet {
+		tags = append(tags, t)
+	}
+	sortStrings(tags)
+	return LetterboxdSnapshot{
+		Watched:   uniqueTitles(watched),
+		Reviews:   uniqueTitles(reviews),
+		Watchlist: uniqueTitles(watchlist),
+		Lists:     uniqueTitles(lists),
+		Tags:      uniqueTitles(tags),
+	}, nil
 }
 
-func snapshotZipFiles(dir string) (map[string]time.Time, error) {
-	entries, err := os.ReadDir(dir)
+func (d *LetterboxdDownloader) newClient() (*http.Client, error) {
+	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]time.Time{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".zip") {
-			continue
-		}
-		full := filepath.Join(dir, e.Name())
-		st, err := os.Stat(full)
-		if err != nil {
-			continue
-		}
-		out[full] = st.ModTime()
-	}
-	return out, nil
+	return &http.Client{
+		Jar:     jar,
+		Timeout: 30 * time.Second,
+	}, nil
 }
 
-func newestNewDiaryZip(dir string, before map[string]time.Time) (string, error) {
-	entries, err := os.ReadDir(dir)
+func (d *LetterboxdDownloader) scrapeSimpleTitleList(ctx context.Context, client *http.Client, target string, patterns []string) ([]string, error) {
+	items := make([]string, 0, 64)
+	next := target
+	for pageNum := 0; pageNum < 20 && next != ""; pageNum++ {
+		page, err := d.fetchHTML(ctx, client, next)
+		if err != nil {
+			return uniqueTitles(items), err
+		}
+		for _, p := range patterns {
+			pat := p
+			if strings.Contains(pat, "%s") {
+				u, _ := url.Parse(target)
+				parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+				user := ""
+				if len(parts) > 0 {
+					user = regexp.QuoteMeta(parts[0])
+				}
+				pat = fmt.Sprintf(pat, user)
+			}
+			re := regexp.MustCompile(`(?is)` + pat)
+			matches := re.FindAllStringSubmatch(page, -1)
+			for _, m := range matches {
+				if len(m) < 2 {
+					continue
+				}
+				v := strings.TrimSpace(stripHTML(m[1]))
+				v = strings.Trim(v, "/")
+				if v == "" {
+					continue
+				}
+				if strings.EqualFold(v, "letterboxd") || strings.EqualFold(v, "show all") {
+					continue
+				}
+				items = append(items, v)
+			}
+		}
+		next = findNextPageURL(next, page)
+	}
+	return uniqueTitles(items), nil
+}
+
+func sortStrings(items []string) {
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[j] < items[i] {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
+}
+
+func (d *LetterboxdDownloader) loginOrFallback(ctx context.Context, client *http.Client, creds LetterboxdCredentials) (bool, error) {
+	if err := d.login(ctx, client, creds); err == nil {
+		return true, nil
+	}
+	ok, pubErr := d.canReadPublicProfile(ctx, client, creds.Username)
+	if pubErr != nil {
+		return false, pubErr
+	}
+	if !ok {
+		return false, errors.New("unable to authenticate and public profile is not accessible")
+	}
+	return false, nil
+}
+
+func (d *LetterboxdDownloader) login(ctx context.Context, client *http.Client, creds LetterboxdCredentials) error {
+	signInURL := "https://letterboxd.com/sign-in/"
+	signInHTML, err := d.fetchHTML(ctx, client, signInURL)
+	if err != nil {
+		return err
+	}
+	formAction, userField, passField, formValues := parseLoginForm(signInHTML)
+	formValues.Set(userField, creds.Username)
+	formValues.Set(passField, creds.Password)
+
+	loginURL, err := resolveURL(signInURL, formAction)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(formValues.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", d.userAgent)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://letterboxd.com")
+	req.Header.Set("Referer", signInURL)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return fmt.Errorf("login failed: %s", resp.Status)
+	}
+
+	ok, err := d.hasSessionCookie(client)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("invalid letterboxd credentials")
+	}
+	return nil
+}
+
+func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Client, username string) ([]scrapedDiaryEntry, error) {
+	base := fmt.Sprintf("https://letterboxd.com/%s/films/diary/", strings.TrimSpace(username))
+	next := base
+	seen := map[string]struct{}{}
+	all := make([]scrapedDiaryEntry, 0, 256)
+
+	for page := 0; page < 200 && next != ""; page++ {
+		htmlPage, err := d.fetchHTML(ctx, client, next)
+		if err != nil {
+			return nil, err
+		}
+		entries := parseDiaryEntriesFromHTML(htmlPage)
+		for _, e := range entries {
+			if e.Date == "" || strings.TrimSpace(e.Title) == "" {
+				continue
+			}
+			k := strings.ToLower(e.Date + "|" + e.Title + "|" + e.FilmPath)
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			all = append(all, e)
+		}
+		next = findNextPageURL(next, htmlPage)
+	}
+	if len(all) > 0 {
+		return all, nil
+	}
+	return d.scrapeDiaryRSS(ctx, client, username)
+}
+
+func (d *LetterboxdDownloader) scrapeDiaryRSS(ctx context.Context, client *http.Client, username string) ([]scrapedDiaryEntry, error) {
+	u := fmt.Sprintf("https://letterboxd.com/%s/rss/", strings.TrimSpace(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", d.userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("rss fetch failed: %s", resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
+	if err != nil {
+		return nil, err
+	}
+	return parseDiaryEntriesFromRSS(string(b)), nil
+}
+
+func (d *LetterboxdDownloader) fetchHTML(ctx context.Context, client *http.Client, target string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return "", err
 	}
-	type candidate struct {
-		path string
-		mod  time.Time
+	req.Header.Set("User-Agent", d.userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
 	}
-	list := make([]candidate, 0)
-	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".zip") {
-			continue
-		}
-		full := filepath.Join(dir, e.Name())
-		st, err := os.Stat(full)
-		if err != nil {
-			continue
-		}
-		oldMod, existed := before[full]
-		if existed && !st.ModTime().After(oldMod) {
-			continue
-		}
-		hasDiary, err := hasDiaryCSV(full)
-		if err != nil || !hasDiary {
-			continue
-		}
-		list = append(list, candidate{path: full, mod: st.ModTime()})
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("request failed %s: %s", target, resp.Status)
 	}
-	if len(list) == 0 {
-		return "", ErrNoNewExportFound
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", err
 	}
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].mod.After(list[j].mod)
-	})
-	return list[0].path, nil
+	return string(b), nil
 }
 
-func hasDiaryCSV(zipPath string) (bool, error) {
-	zr, err := zip.OpenReader(zipPath)
+func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{"Date", "Name", "Year", "Letterboxd URI", "Rating", "Rewatch", "Tags", "Watched Date"}); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		rewatch := "No"
+		if r.Rewatch {
+			rewatch = "Yes"
+		}
+		uri := ""
+		if r.FilmPath != "" {
+			uri = "https://letterboxd.com" + r.FilmPath
+		}
+		if err := w.Write([]string{r.Date, r.Title, r.Year, uri, r.Rating, rewatch, "", r.Date}); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
+func parseLoginForm(page string) (string, string, string, url.Values) {
+	formRe := regexp.MustCompile(`(?is)<form[^>]*action="([^"]*login[^"]*)"[^>]*>(.*?)</form>`)
+	match := formRe.FindStringSubmatch(page)
+	action := "/user/login.do"
+	formBody := page
+	if len(match) >= 3 {
+		action = html.UnescapeString(strings.TrimSpace(match[1]))
+		formBody = match[2]
+	}
+	inputRe := regexp.MustCompile(`(?is)<input[^>]*>`)
+	nameRe := regexp.MustCompile(`\bname="([^"]+)"`)
+	valueRe := regexp.MustCompile(`\bvalue="([^"]*)"`)
+	typeRe := regexp.MustCompile(`\btype="([^"]+)"`)
+	values := url.Values{}
+
+	var userField string
+	var passField string
+	for _, tag := range inputRe.FindAllString(formBody, -1) {
+		nameMatch := nameRe.FindStringSubmatch(tag)
+		if len(nameMatch) < 2 {
+			continue
+		}
+		name := html.UnescapeString(strings.TrimSpace(nameMatch[1]))
+		if name == "" {
+			continue
+		}
+		typ := ""
+		typeMatch := typeRe.FindStringSubmatch(tag)
+		if len(typeMatch) >= 2 {
+			typ = strings.ToLower(strings.TrimSpace(typeMatch[1]))
+		}
+		value := ""
+		valueMatch := valueRe.FindStringSubmatch(tag)
+		if len(valueMatch) >= 2 {
+			value = html.UnescapeString(valueMatch[1])
+		}
+		if typ == "hidden" {
+			values.Set(name, value)
+		}
+		l := strings.ToLower(name)
+		if userField == "" && (strings.Contains(l, "user") || strings.Contains(l, "email") || strings.Contains(l, "login")) {
+			userField = name
+		}
+		if passField == "" && strings.Contains(l, "pass") {
+			passField = name
+		}
+	}
+	if userField == "" {
+		userField = "username"
+	}
+	if passField == "" {
+		passField = "password"
+	}
+	if _, ok := values[userField]; !ok {
+		values.Set(userField, "")
+	}
+	if _, ok := values[passField]; !ok {
+		values.Set(passField, "")
+	}
+	return action, userField, passField, values
+}
+
+func parseDiaryEntriesFromHTML(page string) []scrapedDiaryEntry {
+	rowRe := regexp.MustCompile(`(?is)<tr[^>]*diary-entry-row[^>]*>(.*?)</tr>`)
+	titleRe := regexp.MustCompile(`(?is)<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	dateAttrRe := regexp.MustCompile(`\bdata-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"`)
+	yearAttrRe := regexp.MustCompile(`\bdata-film-release-year="([0-9]{4})"`)
+	dayRe := regexp.MustCompile(`(?is)<td[^>]*td-day[^>]*>\s*<a[^>]*>\s*([0-9]{1,2})\s*</a>`)
+	monthRe := regexp.MustCompile(`(?is)<td[^>]*td-month[^>]*>\s*<small[^>]*>\s*([A-Za-z]{3})\s*</small>`)
+	yearRe := regexp.MustCompile(`(?is)<td[^>]*td-year[^>]*>\s*<a[^>]*>\s*([0-9]{4})\s*</a>`)
+	ratingRe := regexp.MustCompile(`(?is)<td[^>]*td-rating[^>]*>\s*([^<]+)\s*</td>`)
+	out := make([]scrapedDiaryEntry, 0, 128)
+
+	for _, row := range rowRe.FindAllStringSubmatch(page, -1) {
+		block := row[1]
+		tm := titleRe.FindStringSubmatch(block)
+		if len(tm) < 3 {
+			continue
+		}
+		title := strings.TrimSpace(stripHTML(tm[2]))
+		if title == "" {
+			continue
+		}
+
+		date := ""
+		if dm := dateAttrRe.FindStringSubmatch(block); len(dm) >= 2 {
+			date = dm[1]
+		}
+		if date == "" {
+			dayM := dayRe.FindStringSubmatch(block)
+			monthM := monthRe.FindStringSubmatch(block)
+			yearM := yearRe.FindStringSubmatch(block)
+			if len(dayM) >= 2 && len(monthM) >= 2 && len(yearM) >= 2 {
+				if d, err := strconv.Atoi(dayM[1]); err == nil {
+					if m, ok := monthFromShortName(monthM[1]); ok {
+						date = fmt.Sprintf("%s-%02d-%02d", yearM[1], int(m), d)
+					}
+				}
+			}
+		}
+
+		year := ""
+		if ym := yearAttrRe.FindStringSubmatch(block); len(ym) >= 2 {
+			year = ym[1]
+		}
+		rating := ""
+		if rm := ratingRe.FindStringSubmatch(block); len(rm) >= 2 {
+			rating = strings.TrimSpace(stripHTML(rm[1]))
+		}
+		rewatch := strings.Contains(strings.ToLower(block), "icon-rewatch") || strings.Contains(strings.ToLower(block), "td-rewatch")
+		out = append(out, scrapedDiaryEntry{
+			Date:     date,
+			Title:    title,
+			Year:     year,
+			FilmPath: strings.TrimSpace(tm[1]),
+			Rating:   rating,
+			Rewatch:  rewatch,
+		})
+	}
+
+	if len(out) > 0 {
+		return out
+	}
+
+	dataCardRe := regexp.MustCompile(`(?is)<[^>]*data-film-name="([^"]+)"[^>]*data-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"[^>]*>`)
+	for _, m := range dataCardRe.FindAllStringSubmatch(page, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		out = append(out, scrapedDiaryEntry{Title: html.UnescapeString(m[1]), Date: m[2]})
+	}
+	return out
+}
+
+func parseDiaryEntriesFromRSS(feed string) []scrapedDiaryEntry {
+	itemRe := regexp.MustCompile(`(?is)<item>(.*?)</item>`)
+	out := make([]scrapedDiaryEntry, 0, 128)
+	for _, item := range itemRe.FindAllStringSubmatch(feed, -1) {
+		block := item[1]
+		title := textFromTag(block, "letterboxd:filmTitle")
+		if title == "" {
+			title = textFromTag(block, "title")
+		}
+		title = strings.TrimSpace(stripHTML(title))
+		if title == "" {
+			continue
+		}
+		date := textFromTag(block, "letterboxd:watchedDate")
+		if date == "" {
+			if pub := textFromTag(block, "pubDate"); pub != "" {
+				if t, err := parsePubDate(pub); err == nil {
+					date = t.Format("2006-01-02")
+				}
+			}
+		}
+		if date == "" {
+			continue
+		}
+		rating := strings.TrimSpace(textFromTag(block, "letterboxd:memberRating"))
+		rewatch := strings.EqualFold(strings.TrimSpace(textFromTag(block, "letterboxd:rewatch")), "yes")
+		filmPath := ""
+		if link := strings.TrimSpace(textFromTag(block, "link")); link != "" {
+			if u, err := url.Parse(link); err == nil {
+				filmPath = u.Path
+			}
+		}
+		out = append(out, scrapedDiaryEntry{
+			Date:     date,
+			Title:    title,
+			FilmPath: filmPath,
+			Rating:   rating,
+			Rewatch:  rewatch,
+		})
+	}
+	return out
+}
+
+func textFromTag(block, tag string) string {
+	pat := fmt.Sprintf(`(?is)<%s>(.*?)</%s>`, regexp.QuoteMeta(tag), regexp.QuoteMeta(tag))
+	re := regexp.MustCompile(pat)
+	m := re.FindStringSubmatch(block)
+	if len(m) < 2 {
+		return ""
+	}
+	s := strings.TrimSpace(m[1])
+	s = strings.TrimPrefix(s, "<![CDATA[")
+	s = strings.TrimSuffix(s, "]]>")
+	return html.UnescapeString(strings.TrimSpace(s))
+}
+
+func findNextPageURL(currentURL, page string) string {
+	re := regexp.MustCompile(`(?is)<a[^>]*class="[^"]*\bnext\b[^"]*"[^>]*href="([^"]+)"`)
+	m := re.FindStringSubmatch(page)
+	if len(m) < 2 {
+		return ""
+	}
+	u, err := resolveURL(currentURL, html.UnescapeString(strings.TrimSpace(m[1])))
+	if err != nil {
+		return ""
+	}
+	return u
+}
+
+func resolveURL(baseURL, next string) (string, error) {
+	b, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(strings.TrimSpace(next))
+	if err != nil {
+		return "", err
+	}
+	return b.ResolveReference(u).String(), nil
+}
+
+func stripHTML(raw string) string {
+	tagRe := regexp.MustCompile(`(?is)<[^>]+>`)
+	s := tagRe.ReplaceAllString(raw, "")
+	return html.UnescapeString(strings.TrimSpace(s))
+}
+
+func parsePubDate(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	layouts := []string{time.RFC1123Z, time.RFC1123, time.RFC3339}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, errors.New("unsupported pubDate layout")
+}
+
+func monthFromShortName(v string) (time.Month, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "jan":
+		return time.January, true
+	case "feb":
+		return time.February, true
+	case "mar":
+		return time.March, true
+	case "apr":
+		return time.April, true
+	case "may":
+		return time.May, true
+	case "jun":
+		return time.June, true
+	case "jul":
+		return time.July, true
+	case "aug":
+		return time.August, true
+	case "sep":
+		return time.September, true
+	case "oct":
+		return time.October, true
+	case "nov":
+		return time.November, true
+	case "dec":
+		return time.December, true
+	default:
+		return 0, false
+	}
+}
+
+func (d *LetterboxdDownloader) hasSessionCookie(client *http.Client) (bool, error) {
+	u, err := url.Parse("https://letterboxd.com/")
 	if err != nil {
 		return false, err
 	}
-	defer zr.Close()
-	for _, f := range zr.File {
-		if strings.EqualFold(filepath.Base(f.Name), "diary.csv") {
+	for _, c := range client.Jar.Cookies(u) {
+		n := strings.ToLower(strings.TrimSpace(c.Name))
+		if strings.Contains(n, "session") || strings.Contains(n, "signedin") || strings.Contains(n, "auth") {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-func openInBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	default:
-		return fmt.Errorf("unsupported OS for browser auth: %s", runtime.GOOS)
+func (d *LetterboxdDownloader) canReadPublicProfile(ctx context.Context, client *http.Client, username string) (bool, error) {
+	u := fmt.Sprintf("https://letterboxd.com/%s/", strings.TrimSpace(username))
+	page, err := d.fetchHTML(ctx, client, u)
+	if err != nil {
+		return false, err
 	}
-	if err := cmd.Start(); err != nil {
-		return err
+	l := strings.ToLower(page)
+	if strings.Contains(l, "page not found") || strings.Contains(l, "sorry, we can") && strings.Contains(l, "find the page") {
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+func validateScrapeCreds(creds LetterboxdCredentials) error {
+	if strings.TrimSpace(creds.Username) == "" {
+		return errors.New("letterboxd username is required")
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
+	if strings.TrimSpace(creds.Password) == "" {
+		return errors.New("letterboxd password is required")
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
+	return nil
 }
