@@ -633,87 +633,128 @@ func (d *dependencies) ensureLetterboxdCredentials(ctx context.Context) (service
 	return creds, nil
 }
 
-func (d *dependencies) selectLBView(initial string) (string, error) {
-	if initial != "" {
-		switch initial {
-		case "watched", "reviews", "watchlist", "lists", "tags", "heatmap", "all":
-			return initial, nil
-		default:
-			return "", errors.New("invalid --view; use watched,reviews,watchlist,lists,tags,heatmap,all")
-		}
+func (d *dependencies) printLBMenu() {
+	username, _ := d.syncSvc.Username()
+	lines := []string{
+		fmt.Sprintf(" Profile: %s", username),
+		" ",
+		" 1. Watched    - Recently logged films",
+		" 2. Reviews    - Latest reviews and notes",
+		" 3. Watchlist  - Your planned watches",
+		" 4. Lists      - Your Letterboxd collections",
+		" 5. Tags       - Frequently used tags",
+		" 6. Heatmap    - Visual activity map",
+		" 7. All        - Complete overview",
+		" ",
+		" r. Refresh    - Force sync from Letterboxd",
+		" q. Back       - Return to main menu / exit",
 	}
-	fmt.Println("Select what to show:")
-	fmt.Println("1) watched")
-	fmt.Println("2) reviews")
-	fmt.Println("3) watchlist")
-	fmt.Println("4) lists")
-	fmt.Println("5) tags")
-	fmt.Println("6) heatmap")
-	fmt.Println("7) all")
-	fmt.Print("Choose [1-7]: ")
-	r := bufio.NewReader(os.Stdin)
-	raw, _ := r.ReadString('\n')
-	switch strings.TrimSpace(raw) {
-	case "1":
-		return "watched", nil
-	case "2":
-		return "reviews", nil
-	case "3":
-		return "watchlist", nil
-	case "4":
-		return "lists", nil
-	case "5":
-		return "tags", nil
-	case "6":
-		return "heatmap", nil
-	case "7", "":
-		return "all", nil
-	default:
-		return "", errors.New("invalid selection")
-	}
+	printUICard("Letterboxd Stats Menu", "Explore your film profile", lines, uiAccent)
 }
 
-func (d *dependencies) runLBStats(ctx context.Context, view string) error {
+func (d *dependencies) runLBStats(ctx context.Context, initialView string) error {
 	creds, err := d.ensureLetterboxdCredentials(ctx)
 	if err != nil {
 		return err
 	}
-	view, err = d.selectLBView(view)
-	if err != nil {
-		return err
+
+	if initialView != "" {
+		return d.showLBView(ctx, creds, initialView)
 	}
-	if _, err := d.syncSvc.SyncAndImport(ctx); err != nil {
-		fmt.Println("sync warning:", err)
+
+	r := bufio.NewReader(os.Stdin)
+	for {
+		printLBStatsBanner()
+		d.printLBMenu()
+		fmt.Printf("\n%s%s●%s %slbstats%s %s❯%s ", uiCool, uiDim, uiReset, uiAccent, uiReset, uiWarm, uiReset)
+		input, err := r.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input == "" {
+			continue
+		}
+		if input == "q" || input == "back" || input == "exit" || input == "quit" {
+			return nil
+		}
+
+		view := ""
+		switch input {
+		case "1", "watched":
+			view = "watched"
+		case "2", "reviews":
+			view = "reviews"
+		case "3", "watchlist":
+			view = "watchlist"
+		case "4", "lists":
+			view = "lists"
+		case "5", "tags":
+			view = "tags"
+		case "6", "heatmap":
+			view = "heatmap"
+		case "7", "all":
+			view = "all"
+		case "r", "refresh":
+			fmt.Println("Refreshing from Letterboxd...")
+			if _, err := d.syncSvc.SyncAndImport(ctx); err != nil {
+				fmt.Printf("%swarning:%s sync failed: %v\n", uiWarm, uiReset, err)
+			}
+			continue
+		default:
+			fmt.Printf("%serror:%s invalid selection\n", uiError, uiReset)
+			continue
+		}
+
+		if err := d.showLBView(ctx, creds, view); err != nil {
+			fmt.Printf("%serror:%s %v\n", uiError, uiReset, err)
+		}
+	}
+}
+
+func (d *dependencies) showLBView(ctx context.Context, creds service.LetterboxdCredentials, view string) error {
+	if _, _, err := d.syncSvc.SyncAndImportIfDue(ctx); err != nil {
+		fmt.Printf("%swarning:%s sync failed: %v\n", uiWarm, uiReset, err)
 	}
 	res, scrapeErr := d.lbStats.SyncAndLoad(ctx, creds)
 	if scrapeErr != nil {
-		fmt.Println("scrape warning:", scrapeErr)
-		fmt.Println("showing cached data when available")
+		fmt.Printf("%swarning:%s scrape failed: %v (using cache)\n", uiWarm, uiReset, scrapeErr)
 	}
-	printFeature := func(name string, fr service.LBFeatureResult) {
+
+	printFeature := func(name string, fr service.LBFeatureResult, color string) {
 		if view != "all" && view != name {
 			return
 		}
-		fmt.Printf("\n[%s] source=%s changed=%t count=%d\n", name, fr.Source, fr.Changed, len(fr.Items))
 		limit := min(20, len(fr.Items))
+		lines := make([]string, 0, limit)
 		for i := 0; i < limit; i++ {
-			fmt.Printf("%2d. %s\n", i+1, fr.Items[i])
+			lines = append(lines, fmt.Sprintf("%2d. %s", i+1, fr.Items[i]))
 		}
 		if len(fr.Items) > limit {
-			fmt.Printf("... +%d more\n", len(fr.Items)-limit)
+			lines = append(lines, fmt.Sprintf("    ... +%d more", len(fr.Items)-limit))
 		}
+		status := "unchanged"
+		if fr.Changed {
+			status = "updated"
+		}
+		subtitle := fmt.Sprintf("Source: %s | Count: %d | Status: %s", fr.Source, len(fr.Items), status)
+		printUICard(strings.ToUpper(name), subtitle, lines, color)
 	}
-	printFeature("watched", res.Watched)
-	printFeature("reviews", res.Reviews)
-	printFeature("watchlist", res.Watchlist)
-	printFeature("lists", res.Lists)
-	printFeature("tags", res.Tags)
+
+	printFeature("watched", res.Watched, uiAccent)
+	printFeature("reviews", res.Reviews, uiRose)
+	printFeature("watchlist", res.Watchlist, uiCool)
+	printFeature("lists", res.Lists, uiWarm)
+	printFeature("tags", res.Tags, uiDim)
+
 	if view == "all" || view == "heatmap" {
 		hm, err := d.heat.RecentWeeks(ctx, 53, time.Now())
 		if err != nil {
 			return err
 		}
-		fmt.Println()
 		printHeatmap(hm)
 	}
 	return nil
@@ -797,7 +838,11 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 		}
 		printStatsCard(st)
 	case "lbstats":
-		return false, d.runLBStats(ctx, "")
+		view := ""
+		if len(args) > 1 {
+			view = args[1]
+		}
+		return false, d.runLBStats(ctx, view)
 	case "refresh":
 		res, err := d.syncSvc.SyncAndImport(ctx)
 		if err != nil {
@@ -1039,6 +1084,13 @@ func printUIBanner() {
 		uiPanel, uiReset, uiStrong, uiAccent, uiReset, uiDim, uiReset, uiPanel, uiReset))
 	printCenteredLine(fmt.Sprintf("%s┃%s %sSession:%s interactive shell  %sMode:%s production-grade TUI            %s┃%s",
 		uiPanel, uiReset, uiDim, uiReset, uiDim, uiReset, uiPanel, uiReset))
+	printCenteredLine(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
+}
+
+func printLBStatsBanner() {
+	printCenteredLine(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
+	printCenteredLine(fmt.Sprintf("%s┃%s %sLETTERBOXD ANALYTICS & INSIGHTS%s%s    %sRemote Data • Scraper Feed%s %s┃%s",
+		uiPanel, uiReset, uiStrong, uiCool, uiReset, uiDim, uiReset, uiPanel, uiReset))
 	printCenteredLine(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
 }
 
