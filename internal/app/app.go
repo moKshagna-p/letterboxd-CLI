@@ -636,18 +636,20 @@ func (d *dependencies) ensureLetterboxdCredentials(ctx context.Context) (service
 func (d *dependencies) printLBMenu() {
 	username, _ := d.syncSvc.Username()
 	lines := []string{
-		fmt.Sprintf(" Profile: %s", username),
-		" ",
-		" 1. Watched    - Recently logged films",
-		" 2. Reviews    - Latest reviews and notes",
-		" 3. Watchlist  - Your planned watches",
-		" 4. Lists      - Your Letterboxd collections",
-		" 5. Tags       - Frequently used tags",
-		" 6. Heatmap    - Visual activity map",
-		" 7. All        - Complete overview",
-		" ",
-		" r. Refresh    - Force sync from Letterboxd",
-		" q. Back       - Return to main menu / exit",
+		"",
+		fmt.Sprintf("          Profile: %s%s%s", uiAccent+uiReset, username, ""),
+		"",
+		"          1.  Watched      Recently logged films",
+		"          2.  Reviews      Latest reviews and notes",
+		"          3.  Watchlist    Your planned watches",
+		"          4.  Lists        Your Letterboxd collections",
+		"          5.  Tags         Frequently used tags",
+		"          6.  Heatmap      Visual activity map",
+		"          7.  All          Complete overview",
+		"",
+		"          r.  Refresh      Force sync from Letterboxd",
+		"          q.  Back         Return to main menu",
+		"",
 	}
 	printUICard("Letterboxd Stats Menu", "Explore your film profile", lines, uiAccent)
 }
@@ -1066,67 +1068,119 @@ func (d *dependencies) showListItems(ctx context.Context, listID string) error {
 
 const (
 	uiReset  = "\x1b[0m"
-	uiAccent = "\x1b[38;2;255;168;76m"
-	uiWarm   = "\x1b[38;2;255;116;94m"
-	uiRose   = "\x1b[38;2;240;102;156m"
-	uiCool   = "\x1b[38;2;104;193;255m"
+	uiAccent = "\x1b[38;2;232;180;120m" // warm gold / aged paper
+	uiWarm   = "\x1b[38;2;204;102;102m" // dusty red / lobby carpet
+	uiRose   = "\x1b[38;2;199;134;157m" // muted mauve-pink
+	uiCool   = "\x1b[38;2;130;180;205m" // faded powder blue
+	uiMint   = "\x1b[38;2;130;190;160m" // sage / mint green
 	uiError  = "\x1b[38;2;255;82;82m"
-	uiDim    = "\x1b[38;2;146;162;189m"
-	uiPanel  = "\x1b[38;2;34;49;75m"
+	uiDim    = "\x1b[38;2;146;155;165m" // soft gray
+	uiPanel  = "\x1b[38;2;90;100;115m"  // slate-blue borders (visible)
 	uiStrong = "\x1b[1m"
+	uiFaint  = "\x1b[2m" // dim/faint attribute
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func printUIBanner() {
-	printCenteredLine(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
-	printCenteredLine(fmt.Sprintf("%s┃%s %sLETTERBOXD OPERATIONS CONSOLE%s%s  %sData • Analytics • Curation%s %s┃%s",
-		uiPanel, uiReset, uiStrong, uiAccent, uiReset, uiDim, uiReset, uiPanel, uiReset))
-	printCenteredLine(fmt.Sprintf("%s┃%s %sSession:%s interactive shell  %sMode:%s production-grade TUI            %s┃%s",
-		uiPanel, uiReset, uiDim, uiReset, uiDim, uiReset, uiPanel, uiReset))
-	printCenteredLine(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
+	w := 78
+	title := letterSpace("LETTERBOXD OPERATIONS CONSOLE")
+	sub := "Data  ·  Analytics  ·  Curation"
+	session := "Session: interactive shell   Mode: production-grade TUI"
+	fmt.Println()
+	printCenteredLine(uiPanel + "╔" + strings.Repeat("═", w) + "╗" + uiReset)
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s%s║%s",
+		uiPanel, uiReset, uiStrong+uiAccent, centerText(title, w), uiReset, uiPanel, uiReset))
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
+		uiPanel, uiReset, uiDim, centerText("── "+sub+" ──", w), uiPanel, uiReset))
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
+		uiPanel, uiReset, uiDim, centerText(session, w), uiPanel, uiReset))
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(uiPanel + "╚" + strings.Repeat("═", w) + "╝" + uiReset)
+	fmt.Println()
 }
 
 func printLBStatsBanner() {
-	printCenteredLine(uiPanel + "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓" + uiReset)
-	printCenteredLine(fmt.Sprintf("%s┃%s %sLETTERBOXD ANALYTICS & INSIGHTS%s%s    %sRemote Data • Scraper Feed%s %s┃%s",
-		uiPanel, uiReset, uiStrong, uiCool, uiReset, uiDim, uiReset, uiPanel, uiReset))
-	printCenteredLine(uiPanel + "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛" + uiReset)
+	w := 78
+	title := letterSpace("LETTERBOXD ANALYTICS & INSIGHTS")
+	sub := "Remote Data  ·  Scraper Feed"
+	fmt.Println()
+	printCenteredLine(uiPanel + "╔" + strings.Repeat("═", w) + "╗" + uiReset)
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s%s║%s",
+		uiPanel, uiReset, uiStrong+uiCool, centerText(title, w), uiReset, uiPanel, uiReset))
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
+		uiPanel, uiReset, uiDim, centerText("── "+sub+" ──", w), uiPanel, uiReset))
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(uiPanel + "╚" + strings.Repeat("═", w) + "╝" + uiReset)
 }
 
 func printUIHelp() {
-	printCenteredLine(uiDim + "Command Palette" + uiReset)
-	printCenteredLine("  data:      watched | ratings | reviews | heatmap | stats | lbstats | refresh")
-	printCenteredLine("  watchlist: watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
-	printCenteredLine("  lists:     lists | lists create <name> | lists add <list-id> <title> [--notes text] | lists view <list-id>")
-	printCenteredLine("  system:    clear | help | exit")
+	fmt.Println()
+	printCenteredLine(uiDim + "── " + uiReset + uiStrong + letterSpace("COMMAND PALETTE") + uiReset + uiDim + " ──" + uiReset)
+	fmt.Println()
+	printCenteredLine(uiDim + "data" + uiReset + "       watched | ratings | reviews | heatmap | stats | lbstats | refresh")
+	printCenteredLine(uiDim + "watchlist" + uiReset + "  watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
+	printCenteredLine(uiDim + "lists" + uiReset + "      lists | lists create <name> | lists add <id> <title> | lists view <id>")
+	printCenteredLine(uiDim + "system" + uiReset + "     clear | help | exit")
+	fmt.Println()
 }
 
 func printUICard(title string, subtitle string, lines []string, color string) {
 	innerWidth := 74
-	top := "┌" + strings.Repeat("─", innerWidth) + "┐"
-	bottom := "└" + strings.Repeat("─", innerWidth) + "┘"
+	top := "╭" + strings.Repeat("─", innerWidth) + "╮"
+	bottom := "╰" + strings.Repeat("─", innerWidth) + "╯"
+	side := "│"
+	spacedTitle := letterSpace(strings.ToUpper(title))
+
 	fmt.Println()
 	printCenteredLine(uiPanel + top + uiReset)
-	printCenteredLine(fmt.Sprintf("%s│%s %s%s%s", uiPanel, uiReset, uiStrong, clipText(title, innerWidth-1), uiReset))
+	// breathing room
+	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
+		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
+	// centered letterspaced title
+	printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+		uiPanel, side, uiReset,
+		uiStrong+color, centerText(spacedTitle, innerWidth-2), uiReset,
+		uiPanel, side, uiReset))
 	if subtitle != "" {
-		printCenteredLine(fmt.Sprintf("%s│%s %s%s", uiPanel, uiReset, uiDim, clipText(subtitle, innerWidth-1)+uiReset))
-		printCenteredLine(fmt.Sprintf("%s│%s %s", uiPanel, uiReset, strings.Repeat("·", innerWidth-1)))
+		// centered subtitle with decorative dashes
+		styledSub := "── " + subtitle + " ──"
+		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+			uiPanel, side, uiReset,
+			uiDim, centerText(styledSub, innerWidth-2), uiReset,
+			uiPanel, side, uiReset))
+		// dashed separator
+		sep := dashedSep(innerWidth - 6)
+		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+			uiPanel, side, uiReset,
+			uiPanel, centerText(sep, innerWidth-2), uiReset,
+			uiPanel, side, uiReset))
 	}
 	if len(lines) == 0 {
-		printCenteredLine(fmt.Sprintf("%s│%s %s(no data)%s", uiPanel, uiReset, uiRose, uiReset))
+		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+			uiPanel, side, uiReset,
+			uiRose, centerText("( no data )", innerWidth-2), uiReset,
+			uiPanel, side, uiReset))
 		printCenteredLine(uiPanel + bottom + uiReset)
 		return
 	}
 	for _, line := range lines {
-		padded := padRight(clipText(line, innerWidth-1), innerWidth-1)
-		printCenteredLine(fmt.Sprintf("%s│%s %s%s", uiPanel, uiReset, color, padded+uiReset))
+		padded := padRight(clipText(line, innerWidth-4), innerWidth-4)
+		printCenteredLine(fmt.Sprintf("%s%s%s  %s%s%s  %s%s%s",
+			uiPanel, side, uiReset,
+			color, padded, uiReset,
+			uiPanel, side, uiReset))
 	}
+	// breathing room
+	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
+		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
 	printCenteredLine(uiPanel + bottom + uiReset)
 }
 
 func printStatsCard(stt domain.YearStats) {
-	lines := []string{tableHeader([]string{"Metric", "Value"}, []int{32, 8})}
+	leaderWidth := 48
 	stats := [][]string{
 		{"Year", fmt.Sprintf("%d", stt.Year)},
 		{"Total Logs", fmt.Sprintf("%d", stt.TotalLogs)},
@@ -1134,9 +1188,13 @@ func printStatsCard(stt domain.YearStats) {
 		{"Longest Streak", fmt.Sprintf("%d", stt.LongestStreak)},
 		{"Current Streak", fmt.Sprintf("%d", stt.CurrentStreak)},
 	}
+	lines := make([]string, 0, len(stats)+2)
+	lines = append(lines, "") // breathing room
 	for _, row := range stats {
-		lines = append(lines, tableRow(row, []int{32, 8}))
+		leader := dotLeader(row[0], row[1], leaderWidth)
+		lines = append(lines, centerText(leader, 70))
 	}
+	lines = append(lines, "") // breathing room
 	printUICard("Analytics Snapshot", "Year summary", lines, uiCool)
 }
 
@@ -1194,7 +1252,63 @@ func terminalWidth() int {
 
 func visibleLen(s string) int {
 	clean := ansiEscapePattern.ReplaceAllString(s, "")
-	return len(clean)
+	return len([]rune(clean))
+}
+
+// letterSpace inserts spaces between each character: "HELLO" -> "H E L L O"
+func letterSpace(s string) string {
+	runes := []rune(s)
+	if len(runes) <= 1 {
+		return s
+	}
+	parts := make([]string, len(runes))
+	for i, r := range runes {
+		parts[i] = string(r)
+	}
+	return strings.Join(parts, " ")
+}
+
+// centerText centers s within a field of given width, padding both sides.
+func centerText(s string, width int) string {
+	vLen := visibleLen(s)
+	if vLen >= width {
+		return s
+	}
+	left := (width - vLen) / 2
+	right := width - vLen - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
+}
+
+// dashedSep produces a "─ ─ ─ ─" style separator of approximately w visible characters.
+func dashedSep(w int) string {
+	if w <= 0 {
+		return ""
+	}
+	count := (w + 1) / 2 // each "─ " is 2 chars
+	var b strings.Builder
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteRune('─')
+		if b.Len() >= w {
+			break
+		}
+	}
+	result := b.String()
+	if len(result) > w {
+		result = result[:w]
+	}
+	return result
+}
+
+// dotLeader produces "Label ........... Value" padded to width.
+func dotLeader(label, value string, width int) string {
+	dots := width - len(label) - len(value) - 2 // 1 space each side of dots
+	if dots < 3 {
+		dots = 3
+	}
+	return label + " " + strings.Repeat(".", dots) + " " + value
 }
 
 func parseTitleWithOptionalNotes(args []string, start int) (string, *string, error) {
@@ -1389,18 +1503,39 @@ func parseOptionalRating(v string) (*float64, error) {
 func printHeatmap(hm domain.HeatmapMatrix) {
 	weeks := orderWeeksChronologically(hm.Weeks)
 	if len(weeks) == 0 {
-		fmt.Println("No heatmap data.")
+		printCenteredLine(uiDim + "( no heatmap data )" + uiReset)
 		return
+	}
+
+	// Count total films for the legend
+	totalFilms := 0
+	for _, week := range weeks {
+		for _, cell := range week {
+			totalFilms += cell.Intensity
+		}
 	}
 
 	monthHeader := buildMonthHeader(weeks)
 	const (
-		labelWidth = 3
-		cellSpan   = 2 // 1-char cell + 1 space
+		labelWidth = 5
+		cellSpan   = 2
 	)
+	gridWidth := labelWidth + 1 + len(weeks)*cellSpan
 
+	// Title + subtitle
 	fmt.Println()
-	fmt.Printf(" %*s %s\n", labelWidth, "", monthHeader)
+	fmt.Println()
+	title := letterSpace("ACTIVITY MAP")
+	printCenteredLine(uiStrong + uiAccent + title + uiReset)
+	printCenteredLine(uiDim + "── Your viewing pattern over the last year ──" + uiReset)
+	fmt.Println()
+
+	// Month header row, centered
+	headerLine := fmt.Sprintf(" %*s %s", labelWidth, "", monthHeader)
+	headerPadded := padRight(headerLine, gridWidth)
+	printCenteredLine(uiDim + headerPadded + uiReset)
+
+	// Day rows, centered
 	for day := 0; day < 7; day++ {
 		label := ""
 		switch day {
@@ -1416,8 +1551,18 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 			row.WriteString(githubStyleCell(week[day].Intensity))
 			row.WriteByte(' ')
 		}
-		fmt.Printf(" %-*s %s\n", labelWidth, label, row.String())
+		line := fmt.Sprintf(" %-*s %s", labelWidth, label, row.String())
+		printCenteredLine(line)
 	}
+
+	// Legend bar centered below
+	fmt.Println()
+	legend := fmt.Sprintf("%sLess %s %s %s %s %s More%s       %sTotal: %d films%s",
+		uiDim,
+		githubStyleCell(0), githubStyleCell(1), githubStyleCell(2), githubStyleCell(3), githubStyleCell(4),
+		uiReset,
+		uiAccent, totalFilms, uiReset)
+	printCenteredLine(legend)
 	fmt.Println()
 }
 
@@ -1465,18 +1610,18 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 }
 
 func githubStyleCell(intensity int) string {
-	// Warm palette to avoid a typical "developer green" graph look.
+	// Wes Anderson warm pastel palette.
 	switch intensity {
 	case 0:
-		return "\x1b[38;2;47;62;86m■\x1b[0m"
+		return "\x1b[38;2;60;68;80m■\x1b[0m" // muted slate (empty)
 	case 1:
-		return "\x1b[38;2;143;94;35m■\x1b[0m"
+		return "\x1b[38;2;160;140;100m■\x1b[0m" // aged parchment
 	case 2:
-		return "\x1b[38;2;186;103;54m■\x1b[0m"
+		return "\x1b[38;2;200;150;110m■\x1b[0m" // warm camel
 	case 3:
-		return "\x1b[38;2;224;118;96m■\x1b[0m"
+		return "\x1b[38;2;204;120;100m■\x1b[0m" // dusty terracotta
 	default:
-		return "\x1b[38;2;255;152;122m■\x1b[0m"
+		return "\x1b[38;2;232;180;120m■\x1b[0m" // warm gold (matches uiAccent)
 	}
 }
 
