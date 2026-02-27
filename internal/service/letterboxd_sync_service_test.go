@@ -155,6 +155,9 @@ func TestLetterboxdSyncServiceSyncAndImportIfDueRunsEachCall(t *testing.T) {
 		t.Fatal("expected first sync to run")
 	}
 
+	// Advance clock past the sync cooldown so the second call is due
+	syncSvc.now = func() time.Time { return base.Add(10 * time.Minute) }
+
 	_, ran, err = syncSvc.SyncAndImportIfDue(context.Background())
 	if err != nil {
 		t.Fatal(err)

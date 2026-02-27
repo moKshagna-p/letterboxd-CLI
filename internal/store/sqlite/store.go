@@ -83,10 +83,6 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return nil }
 
-func (s *Store) Migrate(ctx context.Context) error {
-	return s.exec(ctx, initSQL)
-}
-
 func (s *Store) ensureDefaultProfile(ctx context.Context) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	sql := fmt.Sprintf(`
@@ -325,34 +321,6 @@ GROUP BY local_date;
 		out[row[0]] = c
 	}
 	return out, nil
-}
-
-func (s *Store) LogsForYear(ctx context.Context, year int) ([]domain.FilmLog, error) {
-	start := fmt.Sprintf("%d-01-01T00:00:00Z", year)
-	end := fmt.Sprintf("%d-12-31T23:59:59Z", year)
-	sql := fmt.Sprintf(`
-SELECT id, profile_id, title, logged_at, local_date,
-COALESCE(CAST(rating AS TEXT), ''),
-CAST(rewatch AS TEXT),
-COALESCE(notes, ''),
-created_at, updated_at
-FROM film_logs
-WHERE profile_id = %s AND logged_at >= %s AND logged_at <= %s
-ORDER BY logged_at ASC;
-`, q(s.profileID), q(start), q(end))
-	rows, err := s.query(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-	logs := make([]domain.FilmLog, 0, len(rows))
-	for _, row := range rows {
-		v, err := parseLogRow(row)
-		if err != nil {
-			return nil, err
-		}
-		logs = append(logs, v)
-	}
-	return logs, nil
 }
 
 func (s *Store) logCount(ctx context.Context) (int, error) {

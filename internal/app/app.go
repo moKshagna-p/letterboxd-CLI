@@ -42,9 +42,7 @@ func RunAuto(args []string) error {
 	}
 
 	ctx := context.Background()
-	if err := deps.autoSyncIfConfigured(ctx); err != nil {
-		fmt.Println("auto-sync skipped:", err)
-	}
+	deps.autoSyncIfConfigured(ctx)
 	rows, err := deps.logs.List(ctx, domain.ListFilter{})
 	if err != nil {
 		return err
@@ -107,33 +105,22 @@ func newDeps() (*dependencies, error) {
 	}, nil
 }
 
-func (d *dependencies) autoSyncIfConfigured(ctx context.Context) error {
+func (d *dependencies) autoSyncIfConfigured(ctx context.Context) {
 	enabled, err := d.syncSvc.Enabled()
-	if err != nil {
-		return err
-	}
-	if !enabled {
-		return nil
+	if err != nil || !enabled {
+		return
 	}
 	status, err := d.syncSvc.CredentialStatus()
-	if err != nil {
-		return err
-	}
-	if status == "not_logged_in" {
-		return nil
-	}
-	if status == "expired" {
-		return nil
+	if err != nil || status == "not_logged_in" || status == "expired" {
+		return
 	}
 	res, ran, err := d.syncSvc.SyncAndImportIfDue(ctx)
-	if err != nil {
-		return err
+	if err != nil || !ran {
+		return // silently skip — non-critical, cached data is available
 	}
-	if !ran {
-		return nil
+	if res.ImportResult.Imported > 0 || res.WatchlistAdded > 0 {
+		fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 	}
-	fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
-	return nil
 }
 
 func (d *dependencies) run(args []string) error {
@@ -285,9 +272,7 @@ func (d *dependencies) run(args []string) error {
 		fmt.Printf("dedupe complete: removed=%d\n", removed)
 		return nil
 	case "heatmap":
-		if err := d.autoSyncIfConfigured(ctx); err != nil {
-			fmt.Println("auto-sync skipped:", err)
-		}
+		d.autoSyncIfConfigured(ctx)
 		fs := flag.NewFlagSet("heatmap", flag.ContinueOnError)
 		year := fs.Int("year", 0, "year")
 		recentWeeks := fs.Int("recent-weeks", 53, "show rolling recent weeks ending now")
@@ -519,9 +504,6 @@ func onboardingImport(csvSvc *service.CSVService, syncSvc *service.LetterboxdSyn
 				fmt.Printf("Auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 				return nil
 			}
-			if err != nil {
-				fmt.Println("Auto-sync failed:", err)
-			}
 		}
 	}
 	fmt.Println("Export from Letterboxd and provide either the export ZIP or diary CSV path.")
@@ -703,7 +685,8 @@ func (d *dependencies) runLBStats(ctx context.Context, initialView string) error
 		case "r", "refresh":
 			fmt.Println("Refreshing from Letterboxd...")
 			if _, err := d.syncSvc.SyncAndImport(ctx); err != nil {
-				fmt.Printf("%swarning:%s sync failed: %v\n", uiWarm, uiReset, err)
+				// sync failure during manual refresh is worth showing
+				fmt.Printf("%serror:%s sync failed: %v\n", uiError, uiReset, err)
 			}
 			continue
 		default:
@@ -718,12 +701,13 @@ func (d *dependencies) runLBStats(ctx context.Context, initialView string) error
 }
 
 func (d *dependencies) showLBView(ctx context.Context, creds service.LetterboxdCredentials, view string) error {
-	if _, _, err := d.syncSvc.SyncAndImportIfDue(ctx); err != nil {
-		fmt.Printf("%swarning:%s sync failed: %v\n", uiWarm, uiReset, err)
-	}
+	// Silently attempt sync — non-critical, uses cache on failure
+	_, _, _ = d.syncSvc.SyncAndImportIfDue(ctx)
 	res, scrapeErr := d.lbStats.SyncAndLoad(ctx, creds)
-	if scrapeErr != nil {
-		fmt.Printf("%swarning:%s scrape failed: %v (using cache)\n", uiWarm, uiReset, scrapeErr)
+	if scrapeErr != nil && len(res.Watched.Items) == 0 && len(res.Reviews.Items) == 0 &&
+		len(res.Watchlist.Items) == 0 && len(res.Lists.Items) == 0 && len(res.Tags.Items) == 0 {
+		// Major error: scrape failed AND no cached data available
+		return fmt.Errorf("unable to load Letterboxd data: %v", scrapeErr)
 	}
 
 	printFeature := func(name string, fr service.LBFeatureResult, color string) {
@@ -815,9 +799,7 @@ func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, 
 	switch args[0] {
 	case "help", "clear", "exit", "quit", "q":
 	default:
-		if err := d.autoSyncIfConfigured(ctx); err != nil {
-			fmt.Println("auto-sync skipped:", err)
-		}
+		d.autoSyncIfConfigured(ctx)
 	}
 	switch args[0] {
 	case "help":
@@ -1072,12 +1054,10 @@ const (
 	uiWarm   = "\x1b[38;2;204;102;102m" // dusty red / lobby carpet
 	uiRose   = "\x1b[38;2;199;134;157m" // muted mauve-pink
 	uiCool   = "\x1b[38;2;130;180;205m" // faded powder blue
-	uiMint   = "\x1b[38;2;130;190;160m" // sage / mint green
 	uiError  = "\x1b[38;2;255;82;82m"
 	uiDim    = "\x1b[38;2;146;155;165m" // soft gray
 	uiPanel  = "\x1b[38;2;90;100;115m"  // slate-blue borders (visible)
 	uiStrong = "\x1b[1m"
-	uiFaint  = "\x1b[2m" // dim/faint attribute
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)

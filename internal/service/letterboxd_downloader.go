@@ -343,6 +343,10 @@ func (d *LetterboxdDownloader) fetchHTML(ctx context.Context, client *http.Clien
 		return "", err
 	}
 	req.Header.Set("User-Agent", d.userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://letterboxd.com/")
+	req.Header.Set("Connection", "keep-alive")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

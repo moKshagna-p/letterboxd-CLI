@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultAuthSessionTTL = time.Hour
-	defaultSyncCooldown   = 0 * time.Second
+	defaultSyncCooldown   = 5 * time.Minute
 )
 
 type LetterboxdSyncService struct {
@@ -232,14 +232,17 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 	defer os.RemoveAll(workDir)
 
 	var dlRes DownloadedExport
-	for attempt := 1; attempt <= 2; attempt++ {
+	for attempt := 1; attempt <= 3; attempt++ {
 		dlRes, err = s.dl.DownloadLatestExport(ctx, creds, workDir)
 		if err == nil {
 			break
 		}
-		if attempt == 2 {
-			return SyncImportResult{}, fmt.Errorf("download export: %w", err)
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second) // backoff: 2s, 4s
 		}
+	}
+	if err != nil {
+		return SyncImportResult{}, fmt.Errorf("download export: %w", err)
 	}
 
 	hash, err := fileSHA256(dlRes.ImportPath)
@@ -295,17 +298,6 @@ func parseRFC3339(raw string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
-}
-
-func isAuthValidAt(cfg AppConfig, now time.Time) bool {
-	if !cfg.BrowserAuthEnabled {
-		return false
-	}
-	exp, ok := parseRFC3339(cfg.AuthExpiresAt)
-	if !ok {
-		return false
-	}
-	return exp.After(now)
 }
 
 func removeSourceZip(path string) error {
@@ -404,8 +396,13 @@ func scrapeLetterboxdWatchlist(username string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "film-heatmap/1.0")
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("User-Agent", "film-heatmap/1.0 (+https://letterboxd.com)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://letterboxd.com/")
+	req.Header.Set("Connection", "keep-alive")
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
