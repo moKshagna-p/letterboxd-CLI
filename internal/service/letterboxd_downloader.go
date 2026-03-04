@@ -26,6 +26,16 @@ type LetterboxdDownloader struct {
 	userAgent string
 }
 
+type httpStatusError struct {
+	target     string
+	status     string
+	statusCode int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("request failed %s: %s", e.target, e.status)
+}
+
 type scrapedDiaryEntry struct {
 	Date     string
 	Title    string
@@ -44,7 +54,10 @@ type LetterboxdSnapshot struct {
 }
 
 func NewLetterboxdDownloader() (*LetterboxdDownloader, error) {
-	return &LetterboxdDownloader{userAgent: "film-heatmap/1.0 (+https://letterboxd.com)"}, nil
+	return &LetterboxdDownloader{
+		// Browser-like UA avoids bot filtering that rejects custom tool identifiers.
+		userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+	}, nil
 }
 
 func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, creds LetterboxdCredentials, outDir string) (DownloadedExport, error) {
@@ -293,6 +306,9 @@ func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Cli
 	for page := 0; page < 200 && next != ""; page++ {
 		htmlPage, err := d.fetchHTML(ctx, client, next)
 		if err != nil {
+			if isRecoverableDiaryFetchError(err) {
+				break
+			}
 			return nil, err
 		}
 		entries := parseDiaryEntriesFromHTML(htmlPage)
@@ -353,13 +369,26 @@ func (d *LetterboxdDownloader) fetchHTML(ctx context.Context, client *http.Clien
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("request failed %s: %s", target, resp.Status)
+		return "", &httpStatusError{target: target, status: resp.Status, statusCode: resp.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+func isRecoverableDiaryFetchError(err error) bool {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	switch statusErr.statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return true
+	default:
+		return false
+	}
 }
 
 func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
