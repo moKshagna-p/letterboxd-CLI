@@ -1487,13 +1487,7 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 		return
 	}
 
-	// Count total films for the legend
-	totalFilms := 0
-	for _, week := range weeks {
-		for _, cell := range week {
-			totalFilms += cell.Intensity
-		}
-	}
+	totalFilms := totalFilmsInWeeks(weeks)
 
 	monthHeader := buildMonthHeader(weeks)
 	const (
@@ -1576,6 +1570,10 @@ func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
 			if start >= len(runes) {
 				continue
 			}
+			if start+len(month) > len(runes) {
+				// Skip labels that would be truncated at the right edge.
+				continue
+			}
 			for i, ch := range month {
 				if start+i >= len(runes) {
 					break
@@ -1616,4 +1614,14 @@ func orderWeeksChronologically(weeks [][]domain.HeatmapCell) [][]domain.HeatmapC
 		return sorted[i][0].Date < sorted[j][0].Date
 	})
 	return sorted
+}
+
+func totalFilmsInWeeks(weeks [][]domain.HeatmapCell) int {
+	total := 0
+	for _, week := range weeks {
+		for _, cell := range week {
+			total += cell.Count
+		}
+	}
+	return total
 }
