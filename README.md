@@ -33,6 +33,8 @@ letterboxd-tui
 ```
 
 `letterboxd-tui` opens the interactive TUI by default.
+On first launch, it asks for your Letterboxd username and password, validates them, saves them locally, syncs your data, and then opens the TUI.
+On later launches, it skips the credential prompt and opens the TUI directly.
 
 ## Behavior you asked for
 - Auto-sync uses authenticated Letterboxd scraping (no repeated manual export download flow).

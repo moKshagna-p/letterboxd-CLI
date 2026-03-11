@@ -43,17 +43,9 @@ func RunAuto(args []string) error {
 	}
 
 	ctx := context.Background()
-	deps.autoSyncIfConfigured(ctx)
-	rows, err := deps.logs.List(ctx, domain.ListFilter{})
-	if err != nil {
+	if err := deps.bootstrapInteractiveLaunch(ctx); err != nil {
 		return err
 	}
-	if len(rows) == 0 {
-		if err := onboardingImport(deps.csvSvc, deps.syncSvc); err != nil {
-			return err
-		}
-	}
-
 	return deps.runUI(ctx)
 }
 
@@ -121,6 +113,58 @@ func (d *dependencies) autoSyncIfConfigured(ctx context.Context) {
 	}
 	if res.ImportResult.Imported > 0 || res.WatchlistAdded > 0 {
 		fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
+	}
+}
+
+func (d *dependencies) bootstrapInteractiveLaunch(ctx context.Context) error {
+	status, err := d.syncSvc.CredentialStatus()
+	if err != nil {
+		return err
+	}
+
+	if status == "not_logged_in" || status == "expired" {
+		fmt.Println("Welcome to letterboxd-tui.")
+		fmt.Println("Sign in with your Letterboxd credentials to set up the TUI.")
+		if _, err := d.promptAndStoreLetterboxdCredentials(ctx, true); err != nil {
+			return err
+		}
+		d.syncOnLaunch(ctx, true)
+		return nil
+	}
+
+	d.autoSyncIfConfigured(ctx)
+
+	rows, err := d.logs.List(ctx, domain.ListFilter{})
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		d.syncOnLaunch(ctx, false)
+	}
+	return nil
+}
+
+func (d *dependencies) syncOnLaunch(ctx context.Context, force bool) {
+	var (
+		res service.SyncImportResult
+		ran bool
+		err error
+	)
+	if force {
+		res, err = d.syncSvc.SyncAndImport(ctx)
+		ran = err == nil
+	} else {
+		res, ran, err = d.syncSvc.SyncAndImportIfDue(ctx)
+	}
+	if err != nil {
+		fmt.Printf("warning: unable to sync from Letterboxd yet: %v\n", err)
+		return
+	}
+	if !ran {
+		return
+	}
+	if res.ImportResult.Imported > 0 || res.ImportResult.Skipped > 0 || res.WatchlistAdded > 0 {
+		fmt.Printf("launch sync complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
 	}
 }
 
@@ -494,61 +538,6 @@ func (d *dependencies) run(args []string) error {
 	}
 }
 
-func onboardingImport(csvSvc *service.CSVService, syncSvc *service.LetterboxdSyncService) error {
-	fmt.Println("No logs found. Import your Letterboxd data to get started.")
-	fmt.Println("We'll try auto-sync first when browser auth is configured.")
-	if syncSvc != nil {
-		status, err := syncSvc.CredentialStatus()
-		if err == nil && status != "not_logged_in" && status != "expired" {
-			res, ran, err := syncSvc.SyncAndImportIfDue(context.Background())
-			if err == nil && ran {
-				fmt.Printf("Auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
-				return nil
-			}
-		}
-	}
-	fmt.Println("Export from Letterboxd and provide either the export ZIP or diary CSV path.")
-	r := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("Import now? [Y/n]: ")
-		ans, _ := r.ReadString('\n')
-		ans = strings.ToLower(strings.TrimSpace(ans))
-		if ans == "n" || ans == "no" {
-			return nil
-		}
-		if ans == "" || ans == "y" || ans == "yes" {
-			break
-		}
-	}
-	fmt.Print("Path to Letterboxd ZIP/CSV: ")
-	path, _ := r.ReadString('\n')
-	path = normalizePromptPath(path)
-	if path == "" {
-		return errors.New("import path is required")
-	}
-	if strings.EqualFold(filepath.Ext(path), ".zip") {
-		ok, err := hasDiaryCSV(path)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("diary.csv not found in zip")
-		}
-	}
-	res, err := csvSvc.ImportLetterboxd(context.Background(), path)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Import complete: imported=%d skipped=%d\n", res.Imported, res.Skipped)
-	if len(res.Errors) > 0 {
-		fmt.Println("Some rows were skipped:")
-		for _, e := range res.Errors {
-			fmt.Println("-", e)
-		}
-	}
-	return nil
-}
-
 // normalizePromptPath lets users paste shell-style escaped paths from terminal prompts.
 func normalizePromptPath(raw string) string {
 	s := strings.TrimSpace(raw)
@@ -588,6 +577,29 @@ func readPasswordPrompt(prompt string) (string, error) {
 	return strings.TrimSpace(pw), nil
 }
 
+func (d *dependencies) promptAndStoreLetterboxdCredentials(ctx context.Context, enableAutoSync bool) (service.LetterboxdCredentials, error) {
+	r := bufio.NewReader(os.Stdin)
+	fmt.Print("Letterboxd username: ")
+	username, _ := r.ReadString('\n')
+	username = strings.TrimSpace(username)
+	password, err := readPasswordPrompt("Letterboxd password: ")
+	if err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	creds := service.LetterboxdCredentials{Username: username, Password: password}
+	fmt.Println("Validating credentials against Letterboxd...")
+	if err := d.syncSvc.ValidateCredentials(ctx, creds); err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	if err := d.syncSvc.SetCredentials(creds); err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	if err := d.syncSvc.SetEnabled(enableAutoSync); err != nil {
+		return service.LetterboxdCredentials{}, err
+	}
+	return creds, nil
+}
+
 func (d *dependencies) ensureLetterboxdCredentials(ctx context.Context) (service.LetterboxdCredentials, error) {
 	creds, err := d.syncSvc.Credentials()
 	if err != nil {
@@ -596,24 +608,8 @@ func (d *dependencies) ensureLetterboxdCredentials(ctx context.Context) (service
 	if strings.TrimSpace(creds.Username) != "" && strings.TrimSpace(creds.Password) != "" {
 		return creds, nil
 	}
-	r := bufio.NewReader(os.Stdin)
 	fmt.Println("No Letterboxd credentials configured. Set them now.")
-	fmt.Print("Letterboxd username: ")
-	username, _ := r.ReadString('\n')
-	username = strings.TrimSpace(username)
-	password, err := readPasswordPrompt("Letterboxd password: ")
-	if err != nil {
-		return service.LetterboxdCredentials{}, err
-	}
-	creds = service.LetterboxdCredentials{Username: username, Password: password}
-	fmt.Println("Validating credentials against Letterboxd...")
-	if err := d.syncSvc.ValidateCredentials(ctx, creds); err != nil {
-		return service.LetterboxdCredentials{}, err
-	}
-	if err := d.syncSvc.SetCredentials(creds); err != nil {
-		return service.LetterboxdCredentials{}, err
-	}
-	return creds, nil
+	return d.promptAndStoreLetterboxdCredentials(ctx, true)
 }
 
 func (d *dependencies) printLBMenu() {
