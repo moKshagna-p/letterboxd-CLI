@@ -43,6 +43,7 @@ brews:
     repository:
       owner: moKshagna-p
       name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/moKshagna-p/letterboxd-TUI-Heatmap
     description: Local-first Letterboxd TUI with diary sync, stats, and heatmaps
     install: |
