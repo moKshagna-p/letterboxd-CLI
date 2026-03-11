@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"film-heatmap/internal/appmeta"
 	"film-heatmap/internal/domain"
 	"film-heatmap/internal/service"
 	store "film-heatmap/internal/store/sqlite"
@@ -73,9 +74,9 @@ func (d *dependencies) close() {
 }
 
 func newDeps() (*dependencies, error) {
-	dbPath := os.Getenv("FILM_HEATMAP_DB")
+	dbPath := appmeta.LookupEnv("LETTERBOXD_TUI_DB", "FILM_HEATMAP_DB")
 	if dbPath == "" {
-		dbPath = "film-heatmap.db"
+		dbPath = appmeta.DefaultDBPath()
 	}
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -1384,7 +1385,7 @@ func padRight(s string, n int) string {
 }
 
 func printUsage() {
-	fmt.Println("film-heatmap help:")
+	fmt.Printf("%s help:\n", appmeta.CommandName())
 	fmt.Println("  help backend   backend/data commands")
 	fmt.Println("  help features  auth/sync commands")
 	fmt.Println("")

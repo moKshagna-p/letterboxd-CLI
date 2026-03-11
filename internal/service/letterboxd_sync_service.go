@@ -225,7 +225,7 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 	if s.dl == nil {
 		return SyncImportResult{}, errors.New("downloader not configured")
 	}
-	workDir, err := os.MkdirTemp("", "film-heatmap-sync-")
+	workDir, err := os.MkdirTemp("", "letterboxd-tui-sync-")
 	if err != nil {
 		return SyncImportResult{}, err
 	}
@@ -396,7 +396,7 @@ func scrapeLetterboxdWatchlist(username string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "film-heatmap/1.0 (+https://letterboxd.com)")
+	req.Header.Set("User-Agent", "letterboxd-tui/1.0 (+https://letterboxd.com)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Referer", "https://letterboxd.com/")

@@ -1,0 +1,57 @@
+version: 2
+
+project_name: letterboxd-tui
+
+before:
+  hooks:
+    - go mod tidy
+    - sh -c 'GOCACHE=$PWD/.gocache go test ./...'
+
+builds:
+  - id: letterboxd-tui
+    main: ./cmd/letterboxd-tui
+    binary: letterboxd-tui
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    ids:
+      - letterboxd-tui
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: letterboxd-tui
+    repository:
+      owner: moKshagna-p
+      name: homebrew-tap
+    homepage: https://github.com/moKshagna-p/letterboxd-TUI-Heatmap
+    description: Local-first Letterboxd TUI with diary sync, stats, and heatmaps
+    install: |
+      bin.install "letterboxd-tui"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    test: |
+      system "#{bin}/letterboxd-tui", "help"
+
+snapshot:
+  version_template: "{{ .Version }}-next"

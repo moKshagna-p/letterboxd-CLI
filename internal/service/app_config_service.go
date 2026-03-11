@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"film-heatmap/internal/appmeta"
 )
 
 type AppConfig struct {
@@ -35,14 +37,14 @@ func NewAppConfigService() (*AppConfigService, error) {
 }
 
 func resolveConfigPath() (string, error) {
-	if p := strings.TrimSpace(os.Getenv("FILM_HEATMAP_CONFIG")); p != "" {
+	if p := appmeta.LookupEnv("LETTERBOXD_TUI_CONFIG", "FILM_HEATMAP_CONFIG"); p != "" {
 		return p, nil
 	}
 	cfgDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cfgDir, "film-heatmap", "config.json"), nil
+	return filepath.Join(cfgDir, appmeta.CanonicalName, "config.json"), nil
 }
 
 func (s *AppConfigService) ConfigPath() string {
@@ -52,7 +54,7 @@ func (s *AppConfigService) ConfigPath() string {
 func (s *AppConfigService) Load() (AppConfig, error) {
 	out := AppConfig{AutoSyncEnabled: true}
 	applyAutoSyncEnv := func() {
-		if env := strings.TrimSpace(os.Getenv("FILM_HEATMAP_AUTO_SYNC")); env != "" {
+		if env := appmeta.LookupEnv("LETTERBOXD_TUI_AUTO_SYNC", "FILM_HEATMAP_AUTO_SYNC"); env != "" {
 			out.AutoSyncEnabled = strings.EqualFold(env, "1") || strings.EqualFold(env, "true") || strings.EqualFold(env, "yes")
 		}
 	}

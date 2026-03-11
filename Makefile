@@ -1,24 +1,28 @@
 .PHONY: build test run-cli run-tui run-app install-local
 
+GOCACHE ?= $(PWD)/.gocache
+GOMODCACHE ?= $(PWD)/.gomodcache
+
 build:
-	go build ./...
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build ./...
 
 test:
-	go test ./...
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...
 
 run-cli:
-	go run ./cmd/cli
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/cli
 
 run-tui:
-	go run ./cmd/tui
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/tui
 
 run-app:
-	go run ./cmd/film-heatmap
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/letterboxd-tui
 
 install-local:
 	mkdir -p ./bin
-	go build -o ./bin/film-heatmap ./cmd/film-heatmap
-	go build -o ./bin/heatmap ./cmd/heatmap
-	go build -o ./bin/tui ./cmd/tui
-	@echo "Built ./bin/film-heatmap, ./bin/heatmap, and ./bin/tui"
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -o ./bin/letterboxd-tui ./cmd/letterboxd-tui
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -o ./bin/film-heatmap ./cmd/film-heatmap
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -o ./bin/heatmap ./cmd/heatmap
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -o ./bin/tui ./cmd/tui
+	@echo "Built ./bin/letterboxd-tui, ./bin/film-heatmap, ./bin/heatmap, and ./bin/tui"
 	@echo "Add to PATH for this shell: export PATH=\"$$PWD/bin:$$PATH\""

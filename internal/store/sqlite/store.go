@@ -2,14 +2,15 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"film-heatmap/internal/domain"
+	_ "modernc.org/sqlite"
 )
 
 const initSQL = `
@@ -66,22 +67,30 @@ CREATE INDEX IF NOT EXISTS idx_film_list_items_list_position ON film_list_items(
 `
 
 type Store struct {
+	db        *sql.DB
 	dbPath    string
 	profileID string
 }
 
 func Open(path string) (*Store, error) {
-	st := &Store{dbPath: path, profileID: "default"}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	st := &Store{db: db, dbPath: path, profileID: "default"}
 	if err := st.exec(context.Background(), initSQL); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := st.ensureDefaultProfile(context.Background()); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	return st, nil
 }
 
-func (s *Store) Close() error { return nil }
+func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) ensureDefaultProfile(ctx context.Context) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -336,30 +345,65 @@ func (s *Store) logCount(ctx context.Context) (int, error) {
 }
 
 func (s *Store) exec(ctx context.Context, sql string) error {
-	cmd := exec.CommandContext(ctx, "sqlite3", s.dbPath, sql)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("sqlite exec failed: %w: %s", err, strings.TrimSpace(string(out)))
+	if _, err := s.db.ExecContext(ctx, sql); err != nil {
+		return fmt.Errorf("sqlite exec failed: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) query(ctx context.Context, sql string) ([][]string, error) {
-	cmd := exec.CommandContext(ctx, "sqlite3", "-separator", "\t", "-noheader", s.dbPath, sql)
-	out, err := cmd.CombinedOutput()
+	rows, err := s.db.QueryContext(ctx, sql)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite query failed: %w: %s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("sqlite query failed: %w", err)
 	}
-	text := strings.TrimSpace(string(out))
-	if text == "" {
-		return [][]string{}, nil
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
 	}
-	lines := strings.Split(text, "\n")
-	rows := make([][]string, 0, len(lines))
-	for _, line := range lines {
-		rows = append(rows, strings.Split(line, "\t"))
+	out := make([][]string, 0)
+	for rows.Next() {
+		values := make([]any, len(cols))
+		scanTargets := make([]any, len(cols))
+		for i := range values {
+			scanTargets[i] = &values[i]
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
+			return nil, err
+		}
+		row := make([]string, len(cols))
+		for i, v := range values {
+			row[i] = stringifySQLiteValue(v)
+		}
+		out = append(out, row)
 	}
-	return rows, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func stringifySQLiteValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		if t {
+			return "1"
+		}
+		return "0"
+	default:
+		return fmt.Sprint(t)
+	}
 }
 
 func parseLogRow(row []string) (domain.FilmLog, error) {

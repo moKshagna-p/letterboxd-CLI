@@ -1,6 +1,23 @@
-# film-heatmap
+# letterboxd-tui
 
 Local-first film logging and GitHub-style daily heatmap.
+
+## Install
+
+macOS:
+```bash
+brew install moKshagna-p/tap/letterboxd-tui
+```
+
+Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/main/scripts/install.sh | sudo sh
+```
+
+Windows PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/main/scripts/install.ps1 | iex
+```
 
 ## Quick start
 ```bash
@@ -12,11 +29,10 @@ export PATH="$PWD/bin:$PATH"
 
 After that, you can run:
 ```bash
-heatmap
-film-heatmap
+letterboxd-tui
 ```
 
-`film-heatmap` now opens an interactive CLI studio where you can type section commands.
+`letterboxd-tui` opens the interactive TUI by default.
 
 ## Behavior you asked for
 - Auto-sync uses authenticated Letterboxd scraping (no repeated manual export download flow).
@@ -28,45 +44,45 @@ film-heatmap
 - TUI data commands trigger sync checks automatically when auto-sync is enabled.
 - Watchlist sync uses public watchlist page scrape fallback.
 - If auto-sync is not configured, the app falls back to manual import (ZIP or diary CSV).
-- After import, `film-heatmap` opens the interactive CLI studio.
+- After import, `letterboxd-tui` opens the interactive CLI studio.
 
 ## Commands
 ```bash
-film-heatmap add --title "Inception" --date 2026-02-20 --rating 4.5
-film-heatmap list --from 2026-01-01 --to 2026-12-31
-film-heatmap heatmap --year 2026
-film-heatmap stats --year 2026
-film-heatmap ui
-film-heatmap help backend
-film-heatmap help features
-film-heatmap auth login
-film-heatmap auth status
-film-heatmap auth logout
-film-heatmap refresh
-film-heatmap lbstats
-film-heatmap lbstats --view watched
-film-heatmap lbstats --view heatmap
-film-heatmap import letterboxd --auto
-film-heatmap import letterboxd --file /path/to/letterboxd-export.zip
-film-heatmap import csv --file /path/to/logs.csv
-film-heatmap export csv --file /path/to/out.csv --year 2026
-film-heatmap dedupe
+letterboxd-tui add --title "Inception" --date 2026-02-20 --rating 4.5
+letterboxd-tui list --from 2026-01-01 --to 2026-12-31
+letterboxd-tui heatmap --year 2026
+letterboxd-tui stats --year 2026
+letterboxd-tui ui
+letterboxd-tui help backend
+letterboxd-tui help features
+letterboxd-tui auth login
+letterboxd-tui auth status
+letterboxd-tui auth logout
+letterboxd-tui refresh
+letterboxd-tui lbstats
+letterboxd-tui lbstats --view watched
+letterboxd-tui lbstats --view heatmap
+letterboxd-tui import letterboxd --auto
+letterboxd-tui import letterboxd --file /path/to/letterboxd-export.zip
+letterboxd-tui import csv --file /path/to/logs.csv
+letterboxd-tui export csv --file /path/to/out.csv --year 2026
+letterboxd-tui dedupe
 ```
 
 ## Account commands
 ```bash
 # Logout current app session
-film-heatmap auth logout
+letterboxd-tui auth logout
 
 # Login once with credentials
-film-heatmap auth login
+letterboxd-tui auth login
 
 # Refresh latest data now
-film-heatmap refresh
+letterboxd-tui refresh
 ```
 
 ## Interactive UI commands
-Inside `film-heatmap` or `film-heatmap ui`:
+Inside `letterboxd-tui` or `letterboxd-tui ui`:
 ```bash
 watched
 ratings
@@ -83,14 +99,21 @@ heatmap
 stats
 ```
 
-Default DB path: `film-heatmap.db` in current directory.
+Default DB path: `letterboxd-tui.db` in current directory.
 Override with:
 ```bash
-export FILM_HEATMAP_DB=/absolute/path/to.db
+export LETTERBOXD_TUI_DB=/absolute/path/to.db
 ```
 
 ## Auto-sync config
 ```bash
-export FILM_HEATMAP_AUTO_SYNC=true
-export FILM_HEATMAP_CONFIG=/absolute/path/to/config.json
+export LETTERBOXD_TUI_AUTO_SYNC=true
+export LETTERBOXD_TUI_CONFIG=/absolute/path/to/config.json
 ```
+
+Legacy `FILM_HEATMAP_*` environment variables still work for compatibility.
+
+## Distribution
+
+See [docs/distribution.md](docs/distribution.md) for the Homebrew and cross-platform packaging plan.
+See [docs/release-checklist.md](docs/release-checklist.md) for the exact steps to publish a release.
