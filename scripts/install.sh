@@ -40,16 +40,8 @@ esac
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
-api_url="https://api.github.com/repos/$REPO/releases/latest"
-tag="$(curl -fsSL "$api_url" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-
-if [ -z "$tag" ]; then
-  echo "failed to resolve the latest release tag" >&2
-  exit 1
-fi
-
 archive="letterboxd-tui_linux_${arch}.tar.gz"
-url="https://github.com/$REPO/releases/download/$tag/$archive"
+url="https://github.com/$REPO/releases/latest/download/$archive"
 
 curl -fsSL "$url" -o "$tmpdir/$archive"
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"

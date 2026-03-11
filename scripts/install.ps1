@@ -9,13 +9,8 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE.ToLowerInvariant()) {
   default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-if (-not $release.tag_name) {
-  throw "Failed to resolve the latest release tag"
-}
-
 $zipName = "letterboxd-tui_windows_${arch}.zip"
-$zipUrl = "https://github.com/$Repo/releases/download/$($release.tag_name)/$zipName"
+$zipUrl = "https://github.com/$Repo/releases/latest/download/$zipName"
 
 $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("letterboxd-tui-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmpDir | Out-Null

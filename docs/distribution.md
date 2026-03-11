@@ -11,13 +11,13 @@ brew install moKshagna-p/tap/letterboxd-tui
 Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/main/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/v2/scripts/install.sh | sudo sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/v2/scripts/install.ps1 | iex
 ```
 
 `brew install letterboxd-tui` with no tap prefix is only possible after acceptance into `homebrew/core`.
