@@ -1,3 +1,10 @@
 .DS_Store
 .gocache/
 .gomodcache/
+.dist/
+.opencode/
+bin/
+*.db
+*.db-shm
+*.db-wal
+tui

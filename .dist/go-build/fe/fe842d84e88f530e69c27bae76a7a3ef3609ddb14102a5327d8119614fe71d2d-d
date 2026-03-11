@@ -1,7 +1,0 @@
-./csv_service.go
-./heatmap_service.go
-./log_service.go
-./stats_service.go
-./csv_service_test.go
-./heatmap_service_test.go
-./letterboxd_import_test.go
