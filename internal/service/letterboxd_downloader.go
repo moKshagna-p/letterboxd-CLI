@@ -410,16 +410,24 @@ func isRecoverableDiaryFetchError(err error) bool {
 }
 
 func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
+	fmt.Printf("[Scraper] Writing %d scraped entries to CSV: %s\n", len(rows), path)
 	f, err := os.Create(path)
 	if err != nil {
+		fmt.Printf("[Scraper] Failed to create CSV file: %v\n", err)
 		return err
 	}
 	defer f.Close()
 	w := csv.NewWriter(f)
 	if err := w.Write([]string{"Date", "Name", "Year", "Letterboxd URI", "Rating", "Rewatch", "Tags", "Watched Date"}); err != nil {
+		fmt.Printf("[Scraper] Failed to write CSV header: %v\n", err)
 		return err
 	}
+	validRows := 0
 	for _, r := range rows {
+		if r.Title == "" || r.Date == "" {
+			fmt.Printf("[Scraper] Skipping invalid entry: title='%s' date='%s'\n", r.Title, r.Date)
+			continue
+		}
 		rewatch := "No"
 		if r.Rewatch {
 			rewatch = "Yes"
@@ -429,11 +437,18 @@ func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
 			uri = "https://letterboxd.com" + r.FilmPath
 		}
 		if err := w.Write([]string{r.Date, r.Title, r.Year, uri, r.Rating, rewatch, "", r.Date}); err != nil {
+			fmt.Printf("[Scraper] Failed to write row: %v\n", err)
 			return err
 		}
+		validRows++
 	}
 	w.Flush()
-	return w.Error()
+	if err := w.Error(); err != nil {
+		fmt.Printf("[Scraper] CSV writer error: %v\n", err)
+		return err
+	}
+	fmt.Printf("[Scraper] Successfully wrote %d/%d entries to CSV\n", validRows, len(rows))
+	return nil
 }
 
 func parseLoginForm(page string) (string, string, string, url.Values) {

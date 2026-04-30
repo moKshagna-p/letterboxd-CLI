@@ -127,12 +127,14 @@ func (s *CSVService) importLetterboxdCSV(ctx context.Context, reader io.Reader) 
 	if err != nil {
 		return CSVImportResult{}, err
 	}
+	fmt.Printf("[CSV Import] Headers: %v\n", head)
 	idx := map[string]int{}
 	for i, h := range head {
 		idx[strings.ToLower(strings.TrimSpace(h))] = i
 	}
 	titleIdx := firstIndex(idx, "name", "title")
 	dateIdx := firstIndex(idx, "watched date", "date")
+	fmt.Printf("[CSV Import] titleIdx=%d, dateIdx=%d\n", titleIdx, dateIdx)
 	if titleIdx < 0 || dateIdx < 0 {
 		return CSVImportResult{}, errors.New("expected Letterboxd diary headers (Name/Watched Date)")
 	}
@@ -161,7 +163,7 @@ func (s *CSVService) importLetterboxdCSV(ctx context.Context, reader io.Reader) 
 		loggedAt, err := parseLetterboxdDate(row[dateIdx])
 		if err != nil {
 			out.Skipped++
-			out.Errors = append(out.Errors, fmt.Sprintf("line %d: invalid watched date", line))
+			out.Errors = append(out.Errors, fmt.Sprintf("line %d: invalid watched date '%s': %v", line, row[dateIdx], err))
 			continue
 		}
 		title := strings.TrimSpace(row[titleIdx])
@@ -202,6 +204,16 @@ func (s *CSVService) importLetterboxdCSV(ctx context.Context, reader io.Reader) 
 		}
 		seen[k] = struct{}{}
 		out.Imported++
+	}
+	fmt.Printf("[CSV Import] Result: imported=%d, skipped=%d, total_errors=%d\n", out.Imported, out.Skipped, len(out.Errors))
+	if len(out.Errors) > 0 && out.Imported == 0 {
+		fmt.Printf("[CSV Import] First 5 errors (no films imported):\n")
+		for i, e := range out.Errors {
+			if i >= 5 {
+				break
+			}
+			fmt.Printf("  %s\n", e)
+		}
 	}
 	return out, nil
 }
