@@ -16,9 +16,11 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"film-heatmap/internal/appmeta"
 	"film-heatmap/internal/domain"
 	"film-heatmap/internal/service"
+	"film-heatmap/internal/ui"
 	store "film-heatmap/internal/store/sqlite"
 )
 
@@ -758,626 +760,22 @@ func hasDiaryCSV(zipPath string) (bool, error) {
 }
 
 func (d *dependencies) runUI(ctx context.Context) error {
-	printUIBanner()
-	printUIHelp()
-	r := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Printf("\n%s%s●%s %sops-console%s %s❯%s ", uiCool, uiDim, uiReset, uiAccent, uiReset, uiWarm, uiReset)
-		line, err := r.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return err
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			continue
-		}
-		if done, cmdErr := d.handleUICommand(ctx, line); cmdErr != nil {
-			fmt.Printf("%serror:%s %v\n", uiError, uiReset, cmdErr)
-		} else if done {
-			return nil
-		}
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
+	// Create new UI model
+	deps := &ui.Dependencies{
+		Logs:    d.logs,
+		Heat:    d.heat,
+		Stats:   d.stats,
+		LBStats: d.lbStats,
+		CSV:     d.csvSvc,
+		Lib:     d.lib,
+		Cfg:     d.cfgSvc,
+		Sync:    d.syncSvc,
 	}
-}
 
-func (d *dependencies) handleUICommand(ctx context.Context, line string) (bool, error) {
-	args, err := splitUIArgs(line)
-	if err != nil {
-		return false, err
-	}
-	if len(args) == 0 {
-		return false, nil
-	}
-	switch args[0] {
-	case "help", "clear", "exit", "quit", "q":
-	default:
-		d.autoSyncIfConfigured(ctx)
-	}
-	switch args[0] {
-	case "help":
-		printUIHelp()
-	case "clear":
-		fmt.Print("\x1b[2J\x1b[H")
-		printUIBanner()
-	case "exit", "quit", "q":
-		return true, nil
-	case "heatmap":
-		hm, err := d.heat.RecentWeeks(ctx, 53, time.Now())
-		if err != nil {
-			return false, err
-		}
-		printHeatmap(hm)
-	case "stats":
-		st, err := d.stats.Year(ctx, time.Now().Year())
-		if err != nil {
-			return false, err
-		}
-		printStatsCard(st)
-	case "lbstats":
-		view := ""
-		if len(args) > 1 {
-			view = args[1]
-		}
-		return false, d.runLBStats(ctx, view)
-	case "refresh":
-		res, err := d.syncSvc.SyncAndImport(ctx)
-		if err != nil {
-			return false, err
-		}
-		fmt.Printf("%srefresh complete:%s imported=%d skipped=%d watchlist_added=%d\n", uiAccent, uiReset, res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
-	case "watched":
-		return false, d.showWatched(ctx, 20)
-	case "ratings":
-		return false, d.showRatings(ctx, 20)
-	case "reviews":
-		return false, d.showReviews(ctx, 20)
-	case "watchlist":
-		if len(args) == 1 {
-			return false, d.showWatchlist(ctx)
-		}
-		switch args[1] {
-		case "add":
-			title, notes, err := parseTitleWithOptionalNotes(args, 2)
-			if err != nil {
-				return false, err
-			}
-			item, err := d.lib.AddWatchlist(ctx, domain.AddWatchlistInput{Title: title, Notes: notes})
-			if err != nil {
-				return false, err
-			}
-			fmt.Printf("%sadded watchlist:%s %s (%s)\n", uiAccent, uiReset, item.Title, shortID(item.ID))
-			return false, d.showWatchlist(ctx)
-		case "rm", "remove", "delete":
-			if len(args) < 3 {
-				return false, errors.New("usage: watchlist rm <item-id>")
-			}
-			if err := d.lib.RemoveWatchlist(ctx, args[2]); err != nil {
-				return false, err
-			}
-			fmt.Printf("%sremoved watchlist item%s %s\n", uiAccent, uiReset, args[2])
-			return false, d.showWatchlist(ctx)
-		default:
-			return false, errors.New("usage: watchlist [add|rm]")
-		}
-	case "lists":
-		if len(args) == 1 {
-			return false, d.showLists(ctx)
-		}
-		switch args[1] {
-		case "create":
-			if len(args) < 3 {
-				return false, errors.New("usage: lists create <name>")
-			}
-			name := strings.Join(args[2:], " ")
-			lst, err := d.lib.AddList(ctx, domain.AddFilmListInput{Name: name})
-			if err != nil {
-				return false, err
-			}
-			fmt.Printf("%screated list:%s %s (%s)\n", uiAccent, uiReset, lst.Name, shortID(lst.ID))
-			return false, d.showLists(ctx)
-		case "add":
-			if len(args) < 4 {
-				return false, errors.New("usage: lists add <list-id> <title> [--notes text]")
-			}
-			listID := args[2]
-			title, notes, err := parseTitleWithOptionalNotes(args, 3)
-			if err != nil {
-				return false, err
-			}
-			item, err := d.lib.AddListItem(ctx, domain.AddFilmListItemInput{ListID: listID, Title: title, Notes: notes})
-			if err != nil {
-				return false, err
-			}
-			fmt.Printf("%sadded to list:%s #%d %s\n", uiAccent, uiReset, item.Position, item.Title)
-			return false, d.showListItems(ctx, listID)
-		case "view":
-			if len(args) < 3 {
-				return false, errors.New("usage: lists view <list-id>")
-			}
-			return false, d.showListItems(ctx, args[2])
-		default:
-			return false, errors.New("usage: lists [create|add|view]")
-		}
-	default:
-		return false, fmt.Errorf("unknown command: %s (try `help`)", args[0])
-	}
-	return false, nil
-}
-
-func (d *dependencies) showWatched(ctx context.Context, limit int) error {
-	rows, err := d.logs.List(ctx, domain.ListFilter{})
-	if err != nil {
-		return err
-	}
-	lines := make([]string, 0, min(limit, len(rows)))
-	lines = append(lines, tableHeader([]string{"Date", "Rate", "Title"}, []int{10, 6, 52}))
-	for i, r := range rows {
-		if i >= limit {
-			break
-		}
-		rating := "-"
-		if r.Rating != nil {
-			rating = fmt.Sprintf("%.1f★", *r.Rating)
-		}
-		lines = append(lines, tableRow([]string{r.LocalDate, rating, r.Title}, []int{10, 6, 52}))
-	}
-	printUICard("Watched Feed", fmt.Sprintf("Latest %d entries", max(0, len(lines)-1)), lines, uiAccent)
-	return nil
-}
-
-func (d *dependencies) showRatings(ctx context.Context, limit int) error {
-	rows, err := d.logs.List(ctx, domain.ListFilter{})
-	if err != nil {
-		return err
-	}
-	rated := make([]domain.FilmLog, 0, len(rows))
-	for _, r := range rows {
-		if r.Rating != nil {
-			rated = append(rated, r)
-		}
-	}
-	sort.SliceStable(rated, func(i, j int) bool {
-		if *rated[i].Rating == *rated[j].Rating {
-			return rated[i].LoggedAt.After(rated[j].LoggedAt)
-		}
-		return *rated[i].Rating > *rated[j].Rating
-	})
-	lines := make([]string, 0, min(limit, len(rated)))
-	lines = append(lines, tableHeader([]string{"Date", "Score", "Title"}, []int{10, 6, 52}))
-	for i, r := range rated {
-		if i >= limit {
-			break
-		}
-		lines = append(lines, tableRow([]string{r.LocalDate, fmt.Sprintf("%.1f★", *r.Rating), r.Title}, []int{10, 6, 52}))
-	}
-	printUICard("Ratings Desk", fmt.Sprintf("Top %d rated logs", max(0, len(lines)-1)), lines, uiWarm)
-	return nil
-}
-
-func (d *dependencies) showReviews(ctx context.Context, limit int) error {
-	rows, err := d.logs.List(ctx, domain.ListFilter{})
-	if err != nil {
-		return err
-	}
-	lines := make([]string, 0, limit)
-	lines = append(lines, tableHeader([]string{"Date", "Film", "Note Preview"}, []int{10, 26, 32}))
-	for _, r := range rows {
-		if len(lines)-1 >= limit {
-			break
-		}
-		if r.Notes == nil || strings.TrimSpace(*r.Notes) == "" {
-			continue
-		}
-		preview := strings.TrimSpace(*r.Notes)
-		lines = append(lines, tableRow([]string{r.LocalDate, r.Title, preview}, []int{10, 26, 32}))
-	}
-	printUICard("Review Notes", fmt.Sprintf("Recent %d notes", max(0, len(lines)-1)), lines, uiRose)
-	return nil
-}
-
-func (d *dependencies) showWatchlist(ctx context.Context) error {
-	rows, err := d.lib.ListWatchlist(ctx)
-	if err != nil {
-		return err
-	}
-	lines := make([]string, 0, len(rows))
-	lines = append(lines, tableHeader([]string{"ID", "Added", "Title / Notes"}, []int{8, 10, 50}))
-	for _, r := range rows {
-		line := r.Title
-		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
-			line += " | " + *r.Notes
-		}
-		lines = append(lines, tableRow([]string{shortID(r.ID), r.AddedAt.In(time.Local).Format(domain.DateLayout), line}, []int{8, 10, 50}))
-	}
-	printUICard("Watchlist Queue", "Planned watches", lines, uiCool)
-	return nil
-}
-
-func (d *dependencies) showLists(ctx context.Context) error {
-	rows, err := d.lib.ListLists(ctx)
-	if err != nil {
-		return err
-	}
-	lines := make([]string, 0, len(rows))
-	lines = append(lines, tableHeader([]string{"ID", "List", "Films"}, []int{8, 42, 6}))
-	for _, lst := range rows {
-		items, err := d.lib.ListListItems(ctx, lst.ID)
-		if err != nil {
-			return err
-		}
-		lines = append(lines, tableRow([]string{shortID(lst.ID), lst.Name, fmt.Sprintf("%d", len(items))}, []int{8, 42, 6}))
-	}
-	printUICard("Collections", "Custom lists", lines, uiAccent)
-	return nil
-}
-
-func (d *dependencies) showListItems(ctx context.Context, listID string) error {
-	lists, err := d.lib.ListLists(ctx)
-	if err != nil {
-		return err
-	}
-	name := listID
-	for _, lst := range lists {
-		if lst.ID == listID {
-			name = lst.Name
-			break
-		}
-	}
-	rows, err := d.lib.ListListItems(ctx, listID)
-	if err != nil {
-		return err
-	}
-	lines := make([]string, 0, len(rows))
-	lines = append(lines, tableHeader([]string{"#", "Title", "Notes"}, []int{3, 36, 24}))
-	for _, r := range rows {
-		notes := ""
-		if r.Notes != nil && strings.TrimSpace(*r.Notes) != "" {
-			notes = *r.Notes
-		}
-		lines = append(lines, tableRow([]string{fmt.Sprintf("%d", r.Position), r.Title, notes}, []int{3, 36, 24}))
-	}
-	printUICard("Collection View", fmt.Sprintf("%s (%d films)", name, len(rows)), lines, uiWarm)
-	return nil
-}
-
-const (
-	uiReset  = "\x1b[0m"
-	uiAccent = "\x1b[38;2;232;180;120m" // warm gold / aged paper
-	uiWarm   = "\x1b[38;2;204;102;102m" // dusty red / lobby carpet
-	uiRose   = "\x1b[38;2;199;134;157m" // muted mauve-pink
-	uiCool   = "\x1b[38;2;130;180;205m" // faded powder blue
-	uiError  = "\x1b[38;2;255;82;82m"
-	uiDim    = "\x1b[38;2;146;155;165m" // soft gray
-	uiPanel  = "\x1b[38;2;90;100;115m"  // slate-blue borders (visible)
-	uiStrong = "\x1b[1m"
-)
-
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func printUIBanner() {
-	w := 78
-	title := letterSpace("LETTERBOXD OPERATIONS CONSOLE")
-	sub := "Data  ·  Analytics  ·  Curation"
-	session := "Session: interactive shell   Mode: production-grade TUI"
-	fmt.Println()
-	printCenteredLine(uiPanel + "╔" + strings.Repeat("═", w) + "╗" + uiReset)
-	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
-	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s%s║%s",
-		uiPanel, uiReset, uiStrong+uiAccent, centerText(title, w), uiReset, uiPanel, uiReset))
-	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
-		uiPanel, uiReset, uiDim, centerText("── "+sub+" ──", w), uiPanel, uiReset))
-	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
-		uiPanel, uiReset, uiDim, centerText(session, w), uiPanel, uiReset))
-	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
-	printCenteredLine(uiPanel + "╚" + strings.Repeat("═", w) + "╝" + uiReset)
-	fmt.Println()
-}
-
-func printLBStatsBanner() {
-	w := 78
-	title := letterSpace("LETTERBOXD ANALYTICS & INSIGHTS")
-	sub := "Remote Data  ·  Scraper Feed"
-	fmt.Println()
-	printCenteredLine(uiPanel + "╔" + strings.Repeat("═", w) + "╗" + uiReset)
-	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
-	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s%s║%s",
-		uiPanel, uiReset, uiStrong+uiCool, centerText(title, w), uiReset, uiPanel, uiReset))
-	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
-		uiPanel, uiReset, uiDim, centerText("── "+sub+" ──", w), uiPanel, uiReset))
-	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
-	printCenteredLine(uiPanel + "╚" + strings.Repeat("═", w) + "╝" + uiReset)
-}
-
-func printUIHelp() {
-	fmt.Println()
-	printCenteredLine(uiDim + "── " + uiReset + uiStrong + letterSpace("COMMAND PALETTE") + uiReset + uiDim + " ──" + uiReset)
-	fmt.Println()
-	printCenteredLine(uiDim + "data" + uiReset + "       watched | ratings | reviews | heatmap | stats | lbstats | refresh")
-	printCenteredLine(uiDim + "watchlist" + uiReset + "  watchlist | watchlist add <title> [--notes text] | watchlist rm <id>")
-	printCenteredLine(uiDim + "lists" + uiReset + "      lists | lists create <name> | lists add <id> <title> | lists view <id>")
-	printCenteredLine(uiDim + "system" + uiReset + "     clear | help | exit")
-	fmt.Println()
-}
-
-func printUICard(title string, subtitle string, lines []string, color string) {
-	innerWidth := 74
-	top := "╭" + strings.Repeat("─", innerWidth) + "╮"
-	bottom := "╰" + strings.Repeat("─", innerWidth) + "╯"
-	side := "│"
-	spacedTitle := letterSpace(strings.ToUpper(title))
-
-	fmt.Println()
-	printCenteredLine(uiPanel + top + uiReset)
-	// breathing room
-	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
-		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
-	// centered letterspaced title
-	printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
-		uiPanel, side, uiReset,
-		uiStrong+color, centerText(spacedTitle, innerWidth-2), uiReset,
-		uiPanel, side, uiReset))
-	if subtitle != "" {
-		// centered subtitle with decorative dashes
-		styledSub := "── " + subtitle + " ──"
-		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
-			uiPanel, side, uiReset,
-			uiDim, centerText(styledSub, innerWidth-2), uiReset,
-			uiPanel, side, uiReset))
-		// dashed separator
-		sep := dashedSep(innerWidth - 6)
-		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
-			uiPanel, side, uiReset,
-			uiPanel, centerText(sep, innerWidth-2), uiReset,
-			uiPanel, side, uiReset))
-	}
-	if len(lines) == 0 {
-		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
-			uiPanel, side, uiReset,
-			uiRose, centerText("( no data )", innerWidth-2), uiReset,
-			uiPanel, side, uiReset))
-		printCenteredLine(uiPanel + bottom + uiReset)
-		return
-	}
-	for _, line := range lines {
-		padded := padRight(clipText(line, innerWidth-4), innerWidth-4)
-		printCenteredLine(fmt.Sprintf("%s%s%s  %s%s%s  %s%s%s",
-			uiPanel, side, uiReset,
-			color, padded, uiReset,
-			uiPanel, side, uiReset))
-	}
-	// breathing room
-	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
-		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
-	printCenteredLine(uiPanel + bottom + uiReset)
-}
-
-func printStatsCard(stt domain.YearStats) {
-	leaderWidth := 48
-	stats := [][]string{
-		{"Year", fmt.Sprintf("%d", stt.Year)},
-		{"Total Logs", fmt.Sprintf("%d", stt.TotalLogs)},
-		{"Active Days", fmt.Sprintf("%d", stt.ActiveDays)},
-		{"Longest Streak", fmt.Sprintf("%d", stt.LongestStreak)},
-		{"Current Streak", fmt.Sprintf("%d", stt.CurrentStreak)},
-	}
-	lines := make([]string, 0, len(stats)+2)
-	lines = append(lines, "") // breathing room
-	for _, row := range stats {
-		leader := dotLeader(row[0], row[1], leaderWidth)
-		lines = append(lines, centerText(leader, 70))
-	}
-	lines = append(lines, "") // breathing room
-	printUICard("Analytics Snapshot", "Year summary", lines, uiCool)
-}
-
-func tableHeader(cols []string, widths []int) string {
-	upper := make([]string, 0, len(cols))
-	for _, c := range cols {
-		upper = append(upper, strings.ToUpper(c))
-	}
-	return tableRow(upper, widths)
-}
-
-func tableRow(cols []string, widths []int) string {
-	parts := make([]string, 0, len(cols))
-	for i, c := range cols {
-		w := 12
-		if i < len(widths) {
-			w = widths[i]
-		}
-		parts = append(parts, padRight(clipText(c, w), w))
-	}
-	return strings.Join(parts, "  ")
-}
-
-func clipText(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
-	}
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
-
-func printCenteredLine(s string) {
-	width := terminalWidth()
-	padding := (width - visibleLen(s)) / 2
-	if padding < 0 {
-		padding = 0
-	}
-	fmt.Print(strings.Repeat(" ", padding))
-	fmt.Println(s)
-}
-
-func terminalWidth() int {
-	if c := strings.TrimSpace(os.Getenv("COLUMNS")); c != "" {
-		if v, err := strconv.Atoi(c); err == nil && v > 40 {
-			return v
-		}
-	}
-	return 110
-}
-
-func visibleLen(s string) int {
-	clean := ansiEscapePattern.ReplaceAllString(s, "")
-	return len([]rune(clean))
-}
-
-// letterSpace inserts spaces between each character: "HELLO" -> "H E L L O"
-func letterSpace(s string) string {
-	runes := []rune(s)
-	if len(runes) <= 1 {
-		return s
-	}
-	parts := make([]string, len(runes))
-	for i, r := range runes {
-		parts[i] = string(r)
-	}
-	return strings.Join(parts, " ")
-}
-
-// centerText centers s within a field of given width, padding both sides.
-func centerText(s string, width int) string {
-	vLen := visibleLen(s)
-	if vLen >= width {
-		return s
-	}
-	left := (width - vLen) / 2
-	right := width - vLen - left
-	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
-}
-
-// dashedSep produces a "─ ─ ─ ─" style separator of approximately w visible characters.
-func dashedSep(w int) string {
-	if w <= 0 {
-		return ""
-	}
-	count := (w + 1) / 2 // each "─ " is 2 chars
-	var b strings.Builder
-	for i := 0; i < count; i++ {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteRune('─')
-		if b.Len() >= w {
-			break
-		}
-	}
-	result := b.String()
-	if len(result) > w {
-		result = result[:w]
-	}
-	return result
-}
-
-// dotLeader produces "Label ........... Value" padded to width.
-func dotLeader(label, value string, width int) string {
-	dots := width - len(label) - len(value) - 2 // 1 space each side of dots
-	if dots < 3 {
-		dots = 3
-	}
-	return label + " " + strings.Repeat(".", dots) + " " + value
-}
-
-func parseTitleWithOptionalNotes(args []string, start int) (string, *string, error) {
-	if start >= len(args) {
-		return "", nil, errors.New("title is required")
-	}
-	noteFlag := -1
-	for i := start; i < len(args); i++ {
-		if args[i] == "--notes" {
-			noteFlag = i
-			break
-		}
-	}
-	var titleParts []string
-	var notes *string
-	if noteFlag >= 0 {
-		titleParts = args[start:noteFlag]
-		if noteFlag+1 >= len(args) {
-			return "", nil, errors.New("--notes requires text")
-		}
-		n := strings.Join(args[noteFlag+1:], " ")
-		notes = &n
-	} else {
-		titleParts = args[start:]
-	}
-	title := strings.TrimSpace(strings.Join(titleParts, " "))
-	if title == "" {
-		return "", nil, errors.New("title is required")
-	}
-	return title, notes, nil
-}
-
-func splitUIArgs(line string) ([]string, error) {
-	var out []string
-	var current strings.Builder
-	var quote rune
-	escaped := false
-	for _, ch := range line {
-		if escaped {
-			current.WriteRune(ch)
-			escaped = false
-			continue
-		}
-		if ch == '\\' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if ch == quote {
-				quote = 0
-			} else {
-				current.WriteRune(ch)
-			}
-			continue
-		}
-		if ch == '"' || ch == '\'' {
-			quote = ch
-			continue
-		}
-		if ch == ' ' || ch == '\t' {
-			if current.Len() > 0 {
-				out = append(out, current.String())
-				current.Reset()
-			}
-			continue
-		}
-		current.WriteRune(ch)
-	}
-	if escaped {
-		current.WriteRune('\\')
-	}
-	if quote != 0 {
-		return nil, errors.New("unterminated quote")
-	}
-	if current.Len() > 0 {
-		out = append(out, current.String())
-	}
-	return out, nil
-}
-
-func shortID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
-}
-
-func padRight(s string, n int) string {
-	if len(s) >= n {
-		return s
-	}
-	return s + strings.Repeat(" ", n-len(s))
+	model := ui.New(ctx, deps)
+	p := tea.NewProgram(model)
+	_, err := p.Run()
+	return err
 }
 
 func printUsage() {
@@ -1477,6 +875,21 @@ func parseOptionalRating(v string) (*float64, error) {
 	return &r, nil
 }
 
+const (
+	uiReset  = "\x1b[0m"
+	uiAccent = "\x1b[38;2;232;180;120m" // warm gold / aged paper
+	uiWarm   = "\x1b[38;2;204;102;102m" // dusty red / lobby carpet
+	uiRose   = "\x1b[38;2;199;134;157m" // muted mauve-pink
+	uiCool   = "\x1b[38;2;130;180;205m" // faded powder blue
+	uiError  = "\x1b[38;2;255;82;82m"
+	uiDim    = "\x1b[38;2;146;155;165m" // soft gray
+	uiPanel  = "\x1b[38;2;90;100;115m"  // slate-blue borders (visible)
+	uiStrong = "\x1b[1m"
+)
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// Minimal CLI output functions for non-TUI mode
 func printHeatmap(hm domain.HeatmapMatrix) {
 	weeks := orderWeeksChronologically(hm.Weeks)
 	if len(weeks) == 0 {
@@ -1535,6 +948,135 @@ func printHeatmap(hm domain.HeatmapMatrix) {
 		uiAccent, totalFilms, uiReset)
 	printCenteredLine(legend)
 	fmt.Println()
+}
+
+func printUICard(title string, subtitle string, lines []string, color string) {
+	innerWidth := 74
+	top := "╭" + strings.Repeat("─", innerWidth) + "╮"
+	bottom := "╰" + strings.Repeat("─", innerWidth) + "╯"
+	side := "│"
+	spacedTitle := letterSpace(strings.ToUpper(title))
+
+	fmt.Println()
+	printCenteredLine(uiPanel + top + uiReset)
+	// breathing room
+	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
+		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
+	// centered letterspaced title
+	printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+		uiPanel, side, uiReset,
+		uiStrong+color, centerText(spacedTitle, innerWidth-2), uiReset,
+		uiPanel, side, uiReset))
+	if subtitle != "" {
+		// centered subtitle with decorative dashes
+		styledSub := "── " + subtitle + " ──"
+		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+			uiPanel, side, uiReset,
+			uiDim, centerText(styledSub, innerWidth-2), uiReset,
+			uiPanel, side, uiReset))
+	}
+	if len(lines) == 0 {
+		printCenteredLine(fmt.Sprintf("%s%s%s %s%s%s %s%s%s",
+			uiPanel, side, uiReset,
+			uiRose, centerText("( no data )", innerWidth-2), uiReset,
+			uiPanel, side, uiReset))
+		printCenteredLine(uiPanel + bottom + uiReset)
+		return
+	}
+	for _, line := range lines {
+		padded := padRight(clipText(line, innerWidth-4), innerWidth-4)
+		printCenteredLine(fmt.Sprintf("%s%s%s  %s%s%s  %s%s%s",
+			uiPanel, side, uiReset,
+			color, padded, uiReset,
+			uiPanel, side, uiReset))
+	}
+	// breathing room
+	printCenteredLine(fmt.Sprintf("%s%s%s%s%s%s%s",
+		uiPanel, side, uiReset, centerText(" ", innerWidth), uiPanel, side, uiReset))
+	printCenteredLine(uiPanel + bottom + uiReset)
+}
+
+func printLBStatsBanner() {
+	w := 78
+	title := letterSpace("LETTERBOXD ANALYTICS & INSIGHTS")
+	sub := "Remote Data  ·  Scraper Feed"
+	fmt.Println()
+	printCenteredLine(uiPanel + "╔" + strings.Repeat("═", w) + "╗" + uiReset)
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s%s║%s",
+		uiPanel, uiReset, uiStrong+uiCool, centerText(title, w), uiReset, uiPanel, uiReset))
+	printCenteredLine(fmt.Sprintf("%s║%s%s%s%s║%s",
+		uiPanel, uiReset, uiDim, centerText("── "+sub+" ──", w), uiPanel, uiReset))
+	printCenteredLine(uiPanel + "║" + strings.Repeat(" ", w) + "║" + uiReset)
+	printCenteredLine(uiPanel + "╚" + strings.Repeat("═", w) + "╝" + uiReset)
+}
+
+func printCenteredLine(s string) {
+	width := terminalWidth()
+	padding := (width - visibleLen(s)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	fmt.Print(strings.Repeat(" ", padding))
+	fmt.Println(s)
+}
+
+func terminalWidth() int {
+	if c := strings.TrimSpace(os.Getenv("COLUMNS")); c != "" {
+		if v, err := strconv.Atoi(c); err == nil && v > 40 {
+			return v
+		}
+	}
+	return 110
+}
+
+func visibleLen(s string) int {
+	clean := ansiEscapePattern.ReplaceAllString(s, "")
+	return len([]rune(clean))
+}
+
+// letterSpace inserts spaces between each character: "HELLO" -> "H E L L O"
+func letterSpace(s string) string {
+	runes := []rune(s)
+	if len(runes) <= 1 {
+		return s
+	}
+	parts := make([]string, len(runes))
+	for i, r := range runes {
+		parts[i] = string(r)
+	}
+	return strings.Join(parts, " ")
+}
+
+// centerText centers s within a field of given width, padding both sides.
+func centerText(s string, width int) string {
+	vLen := visibleLen(s)
+	if vLen >= width {
+		return s
+	}
+	left := (width - vLen) / 2
+	right := width - vLen - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
+}
+
+func clipText(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func padRight(s string, n int) string {
+	if len(s) >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-len(s))
 }
 
 func buildMonthHeader(weeks [][]domain.HeatmapCell) string {
