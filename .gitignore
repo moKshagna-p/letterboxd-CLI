@@ -8,3 +8,6 @@ bin/
 *.db-shm
 *.db-wal
 tui
+letterboxd-tui
+film-heatmap
+heatmap
