@@ -1,4 +1,4 @@
-.PHONY: build test run-cli run-tui run-app install-local
+.PHONY: build test run-cli run-tui run-app ui install-local
 
 GOCACHE ?= $(PWD)/.gocache
 GOMODCACHE ?= $(PWD)/.gomodcache
@@ -17,6 +17,9 @@ run-tui:
 
 run-app:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/letterboxd-tui
+
+ui:
+	./letterboxd-tui ui
 
 install-local:
 	mkdir -p ./bin
