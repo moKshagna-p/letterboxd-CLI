@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"film-heatmap/internal/domain"
 )
 
 // Theme colors matching the original design
@@ -17,6 +19,7 @@ var (
 	errorColor  = lipgloss.Color("#ff5252")   // error red
 	dimColor    = lipgloss.Color("#929ba5")   // soft gray
 	panelColor  = lipgloss.Color("#5a6473")   // slate-blue
+	uiReset     = "\x1b[0m"
 )
 
 // Box drawing styles
@@ -67,7 +70,7 @@ func (m Model) viewMainMenu() string {
 
 	menu.WriteString(renderCard("MENU", "Choose a view", options, accentColor))
 	menu.WriteString("\n\n")
-	menu.WriteString(dimStyle.Render("● r: Refresh  |  ?: Help  |  q: Quit"))
+	menu.WriteString(dimStyle.Render("↑↓: Navigate  │  q/Esc: Quit  │  r: Refresh  │  ?: Help"))
 
 	return menu.String()
 }
@@ -82,7 +85,7 @@ func (m Model) viewWatched() string {
 	lines = append(lines, renderTableHeader([]string{"Date", "Rating", "Title"}, []int{12, 8, 50}))
 
 	for i, log := range m.watched {
-		if i >= m.height-10 {
+		if i >= m.height-12 {
 			break
 		}
 		rating := "─"
@@ -98,7 +101,7 @@ func (m Model) viewWatched() string {
 	}
 
 	view.WriteString(renderCard("WATCHED", fmt.Sprintf("%d films logged", len(m.watched)), lines, accentColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -113,7 +116,7 @@ func (m Model) viewRatings() string {
 	lines = append(lines, renderTableHeader([]string{"Score", "Date", "Title"}, []int{8, 12, 50}))
 
 	for i, log := range m.ratings {
-		if i >= m.height-10 {
+		if i >= m.height-12 {
 			break
 		}
 		score := fmt.Sprintf("%.1f★", *log.Rating)
@@ -125,7 +128,7 @@ func (m Model) viewRatings() string {
 	}
 
 	view.WriteString(renderCard("RATINGS", fmt.Sprintf("%d rated films", len(m.ratings)), lines, warmColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -140,7 +143,7 @@ func (m Model) viewReviews() string {
 	lines = append(lines, renderTableHeader([]string{"Date", "Film", "Note Preview"}, []int{12, 26, 32}))
 
 	for i, log := range m.reviews {
-		if i >= m.height-10 {
+		if i >= m.height-12 {
 			break
 		}
 		notePreview := ""
@@ -158,7 +161,7 @@ func (m Model) viewReviews() string {
 	}
 
 	view.WriteString(renderCard("REVIEWS", fmt.Sprintf("%d notes recorded", len(m.reviews)), lines, roseColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -169,25 +172,45 @@ func (m Model) viewHeatmap() string {
 	view.WriteString(renderBanner("ACTIVITY MAP", "Your viewing pattern over the last year"))
 	view.WriteString("\n\n")
 
-	// Simplified heatmap rendering
-	lines := make([]string, 0)
-	if len(m.heatmap.Weeks) == 0 {
-		lines = append(lines, dimStyle.Render("( no heatmap data )"))
-	} else {
-		// Simple representation
-		for _, week := range m.heatmap.Weeks {
-			if len(week) > 0 {
-				cells := ""
-				for _, cell := range week {
-					cells += renderHeatmapCell(cell.Intensity) + " "
-				}
-				lines = append(lines, cells)
-			}
-		}
+	// Group weeks chronologically
+	weeks := orderWeeksChronologically(m.heatmap.Weeks)
+	if len(weeks) == 0 {
+		view.WriteString(dimStyle.Render("( no heatmap data )"))
+		view.WriteString("\n\n" + dimStyle.Render("q/Esc: Back"))
+		return view.String()
 	}
 
-	view.WriteString(renderCard("HEATMAP", "52-week view", lines, accentColor))
-	view.WriteString("\n" + dimStyle.Render("Home: Menu  │  q: Back"))
+	totalFilms := totalFilmsInWeeks(weeks)
+
+	// Build month headers
+	monthLine := buildMonthHeaderLine(weeks)
+	view.WriteString(dimStyle.Render(monthLine))
+	view.WriteString("\n")
+
+	// Render 7 day rows (Sunday through Saturday)
+	dayLabels := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+	for day := 0; day < 7; day++ {
+		line := fmt.Sprintf(" %s  ", dayLabels[day])
+		for _, week := range weeks {
+			if day < len(week) {
+				line += renderHeatmapCell(week[day].Intensity) + " "
+			}
+		}
+		view.WriteString(line)
+		view.WriteString("\n")
+	}
+
+	view.WriteString("\n")
+	legend := fmt.Sprintf("%sLess%s %s %s %s %s %s %sMore%s       %sTotal: %d films%s",
+		dimStyle.Render(" "),
+		dimStyle.Render(" "),
+		renderHeatmapCell(0), renderHeatmapCell(1), renderHeatmapCell(2), renderHeatmapCell(3), renderHeatmapCell(4),
+		dimStyle.Render(" "),
+		dimStyle.Render(" "),
+		accentColor, totalFilms, uiReset)
+	view.WriteString(centerPad(legend, 70))
+	view.WriteString("\n\n")
+	view.WriteString(dimStyle.Render("q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -212,7 +235,7 @@ func (m Model) viewStats() string {
 	}
 
 	view.WriteString(renderCard("STATS", "Annual overview", formattedLines, coolColor))
-	view.WriteString("\n" + dimStyle.Render("Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -227,7 +250,7 @@ func (m Model) viewWatchlist() string {
 	lines = append(lines, renderTableHeader([]string{"Added", "Title / Notes"}, []int{12, 60}))
 
 	for i, item := range m.watchlist {
-		if i >= m.height-10 {
+		if i >= m.height-12 {
 			break
 		}
 		note := ""
@@ -242,7 +265,7 @@ func (m Model) viewWatchlist() string {
 	}
 
 	view.WriteString(renderCard("WATCHLIST", fmt.Sprintf("%d items", len(m.watchlist)), lines, coolColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  a: Add  │  d: Delete  │  Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
@@ -257,7 +280,7 @@ func (m Model) viewLists() string {
 	lines = append(lines, renderTableHeader([]string{"List", "Films"}, []int{60, 8}))
 
 	for i, list := range m.lists {
-		if i >= m.height-10 {
+		if i >= m.height-12 {
 			break
 		}
 		row := renderTableRow([]string{list.Name, fmt.Sprintf("%d", 0)}, []int{60, 8})
@@ -268,7 +291,37 @@ func (m Model) viewLists() string {
 	}
 
 	view.WriteString(renderCard("LISTS", fmt.Sprintf("%d collections", len(m.lists)), lines, warmColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  v: View  │  Home: Menu  │  q: Back"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  Enter: View  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
+
+	return view.String()
+}
+
+// viewListItems renders the list items view
+func (m Model) viewListItems() string {
+	view := strings.Builder{}
+	view.WriteString(renderBanner("COLLECTION: "+strings.ToUpper(m.currentListName), fmt.Sprintf("%d films", len(m.listItems))))
+	view.WriteString("\n\n")
+
+	lines := make([]string, 0)
+	lines = append(lines, renderTableHeader([]string{"#", "Title", "Notes"}, []int{3, 50, 20}))
+
+	for i, item := range m.listItems {
+		if i >= m.height-12 {
+			break
+		}
+		notes := ""
+		if item.Notes != nil {
+			notes = *item.Notes
+		}
+		row := renderTableRow([]string{fmt.Sprintf("%d", item.Position), item.Title, notes}, []int{3, 50, 20})
+		if i == m.selectedIndex {
+			row = selectedStyle.Render(row)
+		}
+		lines = append(lines, row)
+	}
+
+	view.WriteString(renderCard("ITEMS", m.currentListName, lines, warmColor))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  7: Lists  │  r: Refresh"))
 
 	return view.String()
 }
@@ -373,4 +426,49 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// Heatmap helpers
+func orderWeeksChronologically(weeks [][]domain.HeatmapCell) [][]domain.HeatmapCell {
+	sorted := make([][]domain.HeatmapCell, 0, len(weeks))
+	for _, week := range weeks {
+		if len(week) > 0 {
+			sorted = append(sorted, week)
+		}
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if len(sorted[i]) > 0 && len(sorted[j]) > 0 {
+			return sorted[i][0].Date < sorted[j][0].Date
+		}
+		return false
+	})
+	return sorted
+}
+
+func buildMonthHeaderLine(weeks [][]domain.HeatmapCell) string {
+	if len(weeks) == 0 {
+		return ""
+	}
+	line := "        " // space for day labels
+	for _, week := range weeks {
+		if len(week) > 0 {
+			t, err := time.Parse("2006-01-02", week[0].Date)
+			if err == nil {
+				line += fmt.Sprintf("%s ", t.Format("Jan")[0:1])
+			} else {
+				line += "  "
+			}
+		}
+	}
+	return line
+}
+
+func totalFilmsInWeeks(weeks [][]domain.HeatmapCell) int {
+	total := 0
+	for _, week := range weeks {
+		for _, cell := range week {
+			total += cell.Count
+		}
+	}
+	return total
 }

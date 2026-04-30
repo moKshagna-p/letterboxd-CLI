@@ -23,6 +23,7 @@ const (
 	ViewStats
 	ViewWatchlist
 	ViewLists
+	ViewListItems
 	ViewEditLog
 )
 
@@ -33,6 +34,7 @@ type Model struct {
 	currentView ViewID
 	width       int
 	height      int
+	loading     bool
 
 	// View state
 	watched         []domain.FilmLog
@@ -42,6 +44,9 @@ type Model struct {
 	stats           domain.YearStats
 	watchlist       []domain.WatchlistItem
 	lists           []domain.FilmList
+	listItems       []domain.FilmListItem
+	currentListID   string
+	currentListName string
 	selectedIndex   int
 	editingLog      *domain.FilmLog
 	editField       string
@@ -88,31 +93,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case loadWatchedMsg:
 		m.watched = msg.logs
+		m.selectedIndex = 0
 		m.currentView = ViewWatched
+		m.loading = false
 		return m, nil
 	case loadRatingsMsg:
 		m.ratings = msg.logs
+		m.selectedIndex = 0
 		m.currentView = ViewRatings
+		m.loading = false
 		return m, nil
 	case loadReviewsMsg:
 		m.reviews = msg.logs
+		m.selectedIndex = 0
 		m.currentView = ViewReviews
+		m.loading = false
 		return m, nil
 	case loadHeatmapMsg:
 		m.heatmap = msg.heatmap
+		m.selectedIndex = 0
 		m.currentView = ViewHeatmap
+		m.loading = false
 		return m, nil
 	case loadStatsMsg:
 		m.stats = msg.stats
+		m.selectedIndex = 0
 		m.currentView = ViewStats
+		m.loading = false
+		return m, nil
+	case loadWatchlistMsg:
+		m.watchlist = msg.items
+		m.selectedIndex = 0
+		m.currentView = ViewWatchlist
+		m.loading = false
+		return m, nil
+	case loadListsMsg:
+		m.lists = msg.lists
+		m.selectedIndex = 0
+		m.currentView = ViewLists
+		m.loading = false
+		return m, nil
+	case loadListItemsMsg:
+		m.listItems = msg.items
+		m.currentListName = msg.listName
+		m.selectedIndex = 0
+		m.currentView = ViewListItems
+		m.loading = false
 		return m, nil
 	case errorMsg:
 		m.message = fmt.Sprintf("Error: %s", msg.err)
 		m.messageTime = time.Now()
+		m.loading = false
 		return m, nil
 	case successMsg:
 		m.message = string(msg)
 		m.messageTime = time.Now()
+		return m, nil
+	case loadingMsg:
+		m.loading = true
 		return m, nil
 	}
 	return m, nil
@@ -120,6 +158,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the current view
 func (m Model) View() string {
+	if m.loading {
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")).
+			Render("⏳ Loading...")
+	}
+
 	var content string
 
 	switch m.currentView {
@@ -139,6 +183,8 @@ func (m Model) View() string {
 		content = m.viewWatchlist()
 	case ViewLists:
 		content = m.viewLists()
+	case ViewListItems:
+		content = m.viewListItems()
 	default:
 		content = "Unknown view"
 	}
@@ -154,7 +200,17 @@ func (m Model) View() string {
 // handleKeyPress handles keyboard input
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "q", "esc":
+		// Go back to main menu from any view
+		if m.currentView != ViewMainMenu {
+			m.currentView = ViewMainMenu
+			m.selectedIndex = 0
+			return m, nil
+		}
+		// Quit if already in main menu
 		return m, tea.Quit
 
 	case "up", "k":
@@ -164,7 +220,11 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
-		m.selectedIndex++
+		// Get current list length based on view
+		maxIndex := m.getMaxIndex() - 1
+		if m.selectedIndex < maxIndex {
+			m.selectedIndex++
+		}
 		return m, nil
 
 	case "home":
@@ -172,6 +232,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectedIndex = 0
 		return m, nil
 
+	// Menu shortcuts
 	case "1":
 		return m, m.loadWatched()
 	case "2":
@@ -190,10 +251,31 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.refreshData()
 	case "?":
-		return m, m.showHelp()
+		m.message = "↑↓/jk: Navigate  │  1-7: Menu  │  Home: Menu  │  q/Esc: Back  │  r: Refresh  │  Ctrl+C: Quit"
+		m.messageTime = time.Now()
+		return m, nil
 	}
 
 	return m, nil
+}
+
+func (m Model) getMaxIndex() int {
+	switch m.currentView {
+	case ViewWatched:
+		return len(m.watched)
+	case ViewRatings:
+		return len(m.ratings)
+	case ViewReviews:
+		return len(m.reviews)
+	case ViewWatchlist:
+		return len(m.watchlist)
+	case ViewLists:
+		return len(m.lists)
+	case ViewListItems:
+		return len(m.listItems)
+	default:
+		return 0
+	}
 }
 
 // Message types for asynchronous operations
@@ -202,8 +284,13 @@ type loadRatingsMsg struct{ logs []domain.FilmLog }
 type loadReviewsMsg struct{ logs []domain.FilmLog }
 type loadHeatmapMsg struct{ heatmap domain.HeatmapMatrix }
 type loadStatsMsg struct{ stats domain.YearStats }
+type loadWatchlistMsg struct{ items []domain.WatchlistItem }
+type loadListsMsg struct{ lists []domain.FilmList }
+type loadListItemsMsg struct{ items []domain.FilmListItem; listName string }
 type errorMsg struct{ err error }
 type successMsg string
+type loadingMsg struct{}
+type doneLoadingMsg struct{}
 
 // Command generators
 func (m Model) loadWatched() tea.Cmd {
@@ -272,15 +359,31 @@ func (m Model) loadStats() tea.Cmd {
 
 func (m Model) loadWatchlist() tea.Cmd {
 	return func() tea.Msg {
-		// Implement watchlist loading
-		return nil
+		items, err := m.deps.Lib.ListWatchlist(m.ctx)
+		if err != nil {
+			return errorMsg{err}
+		}
+		return loadWatchlistMsg{items}
 	}
 }
 
 func (m Model) loadLists() tea.Cmd {
 	return func() tea.Msg {
-		// Implement lists loading
-		return nil
+		lists, err := m.deps.Lib.ListLists(m.ctx)
+		if err != nil {
+			return errorMsg{err}
+		}
+		return loadListsMsg{lists}
+	}
+}
+
+func (m Model) loadListItems(listID string, listName string) tea.Cmd {
+	return func() tea.Msg {
+		items, err := m.deps.Lib.ListListItems(m.ctx, listID)
+		if err != nil {
+			return errorMsg{err}
+		}
+		return loadListItemsMsg{items, listName}
 	}
 }
 
