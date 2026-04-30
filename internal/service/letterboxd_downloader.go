@@ -192,11 +192,14 @@ func (d *LetterboxdDownloader) newClient() (*http.Client, error) {
 func (d *LetterboxdDownloader) scrapeSimpleTitleList(ctx context.Context, client *http.Client, target string, patterns []string) ([]string, error) {
 	items := make([]string, 0, 64)
 	next := target
+	fmt.Printf("[Scraper] Scraping: %s\n", target)
 	for pageNum := 0; pageNum < 20 && next != ""; pageNum++ {
 		page, err := d.fetchHTML(ctx, client, next)
 		if err != nil {
+			fmt.Printf("[Scraper] Scraping %s page %d: fetch error\n", target, pageNum)
 			return uniqueTitles(items), err
 		}
+		pageItems := 0
 		for _, p := range patterns {
 			pat := p
 			if strings.Contains(pat, "%s") {
@@ -223,10 +226,13 @@ func (d *LetterboxdDownloader) scrapeSimpleTitleList(ctx context.Context, client
 					continue
 				}
 				items = append(items, v)
+				pageItems++
 			}
 		}
+		fmt.Printf("[Scraper] %s page %d: found %d items (total: %d)\n", target, pageNum, pageItems, len(items))
 		next = findNextPageURL(next, page)
 	}
+	fmt.Printf("[Scraper] %s: final total %d items\n", target, len(uniqueTitles(items)))
 	return uniqueTitles(items), nil
 }
 
@@ -307,11 +313,13 @@ func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Cli
 		htmlPage, err := d.fetchHTML(ctx, client, next)
 		if err != nil {
 			if isRecoverableDiaryFetchError(err) {
+				fmt.Printf("[Scraper] Diary page %d: recoverable error, stopping pagination\n", page)
 				break
 			}
 			return nil, err
 		}
 		entries := parseDiaryEntriesFromHTML(htmlPage)
+		fmt.Printf("[Scraper] Diary page %d: found %d entries\n", page, len(entries))
 		for _, e := range entries {
 			if e.Date == "" || strings.TrimSpace(e.Title) == "" {
 				continue
@@ -324,10 +332,15 @@ func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Cli
 			all = append(all, e)
 		}
 		next = findNextPageURL(next, htmlPage)
+		if next != "" {
+			fmt.Printf("[Scraper] Diary page %d: found next page link\n", page)
+		}
 	}
+	fmt.Printf("[Scraper] Diary: scraped %d total unique entries across pages\n", len(all))
 	if len(all) > 0 {
 		return all, nil
 	}
+	fmt.Printf("[Scraper] Diary scraping found no pages, falling back to RSS\n")
 	return d.scrapeDiaryRSS(ctx, client, username)
 }
 
