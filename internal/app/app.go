@@ -393,8 +393,12 @@ func (d *dependencies) run(args []string) error {
 			if err := d.syncSvc.SetEnabled(*enableAutoSync); err != nil {
 				return err
 			}
-			fmt.Println("credentials configured")
-			fmt.Printf("auto-sync enabled: %t\n", *enableAutoSync)
+			fmt.Println("✓ credentials configured")
+			fmt.Printf("✓ auto-sync enabled: %t\n", *enableAutoSync)
+			fmt.Println("\nNext steps:")
+			fmt.Println("  1. Check status: ./letterboxd-tui auth status")
+			fmt.Println("  2. Sync data:   ./letterboxd-tui refresh")
+			fmt.Println("  3. View data:   make ui")
 			return nil
 		case "logout":
 			if err := d.syncSvc.InvalidateBrowserSession(); err != nil {
@@ -419,38 +423,66 @@ func (d *dependencies) run(args []string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Println("auto-sync enabled:", enabled)
+			
+			fmt.Println("=== Authentication Status ===")
+			fmt.Println()
+			
 			switch status {
 			case "not_logged_in":
-				fmt.Println("credentials: not configured")
+				fmt.Println("❌ Status: Not logged in")
+				fmt.Println()
+				fmt.Println("To access private data (watchlist, lists, reviews):")
+				fmt.Println("  ./letterboxd-tui auth login")
 			case "expired":
-				fmt.Println("credentials: expired browser session")
+				fmt.Println("⚠️  Status: Session expired")
+				fmt.Println()
+				fmt.Println("Your session has expired. Re-login:")
+				fmt.Println("  ./letterboxd-tui auth login")
 			default:
-				fmt.Println("credentials:", status)
+				fmt.Println("✓ Status: Authenticated")
 			}
-			if expiresAt != nil {
-				fmt.Println("auth expires at:", expiresAt.In(time.Local).Format(time.RFC3339))
-			}
-			if cooldownUntil != nil && cooldownUntil.After(time.Now()) {
-				fmt.Println("next auto-sync after:", cooldownUntil.In(time.Local).Format(time.RFC3339))
-			}
+			
+			fmt.Println()
+			fmt.Println("Auto-sync: " + map[bool]string{true: "enabled ✓", false: "disabled"}[enabled])
+			
 			username, err := d.syncSvc.Username()
-			if err != nil {
-				return err
+			if err == nil && username != "" {
+				fmt.Println("Username: " + username)
 			}
-			if username != "" {
-				fmt.Println("letterboxd username:", username)
+			
+			if expiresAt != nil {
+				fmt.Printf("Auth expires: %s\n", expiresAt.In(time.Local).Format("2006-01-02 15:04"))
 			}
+			
+			if cooldownUntil != nil && cooldownUntil.After(time.Now()) {
+				fmt.Printf("⏳ Next sync available: %s\n", cooldownUntil.In(time.Local).Format("2006-01-02 15:04"))
+			}
+			
+			fmt.Println()
+			fmt.Println("Next: ./letterboxd-tui refresh")
 			return nil
 		default:
 			return errors.New("usage: auth <login|logout|status>")
 		}
 	case "refresh":
+		fmt.Println("Fetching from Letterboxd...")
 		res, err := d.syncSvc.SyncAndImport(ctx)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("refresh complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
+		fmt.Println()
+		fmt.Println("✓ Sync complete!")
+		fmt.Println()
+		fmt.Println("Import results:")
+		fmt.Printf("  Films imported:      %d\n", res.ImportResult.Imported)
+		fmt.Printf("  Films skipped:       %d\n", res.ImportResult.Skipped)
+		fmt.Printf("  Watchlist items:     %d\n", res.WatchlistAdded)
+		fmt.Println()
+		fmt.Println("View your data:")
+		fmt.Println("  • Lists:        make ui  →  press 1 (Watched Films)")
+		fmt.Println("  • Ratings:      make ui  →  press 2 (Ratings Desk)")
+		fmt.Println("  • Watchlist:    make ui  →  press 6 (Watchlist)")
+		fmt.Println("  • Collections:  make ui  →  press 7 (Collections)")
 		return nil
 	case "import":
 		if len(args) < 2 {
