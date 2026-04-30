@@ -324,7 +324,11 @@ func (s *LetterboxdSyncService) syncWatchlist(ctx context.Context, zipPath strin
 		}
 	}
 	if len(titles) == 0 && username != "" {
-		titles, _ = scrapeLetterboxdWatchlist(username)
+		titles, err = scrapeLetterboxdWatchlist(username)
+		if err != nil {
+			// Log the error but don't fail - public profile may still work
+			fmt.Printf("watchlist scrape failed (may be private profile): %v\n", err)
+		}
 	}
 	if len(titles) == 0 {
 		return 0, nil

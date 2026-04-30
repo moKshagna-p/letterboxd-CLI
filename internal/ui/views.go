@@ -182,11 +182,6 @@ func (m Model) viewHeatmap() string {
 
 	totalFilms := totalFilmsInWeeks(weeks)
 
-	// Build month headers
-	monthLine := buildMonthHeaderLine(weeks)
-	view.WriteString(dimStyle.Render(monthLine))
-	view.WriteString("\n")
-
 	// Render 7 day rows (Sunday through Saturday)
 	dayLabels := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 	for day := 0; day < 7; day++ {

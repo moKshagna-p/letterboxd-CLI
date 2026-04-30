@@ -339,7 +339,16 @@ func (m Model) loadReviews() tea.Cmd {
 
 func (m Model) loadHeatmap() tea.Cmd {
 	return func() tea.Msg {
-		hm, err := m.deps.Heat.RecentWeeks(m.ctx, 53, time.Now())
+		// Calculate how many weeks fit in the terminal width
+		// Each week takes ~2 chars, add buffer for day label (5 chars) and spacing
+		weeksToShow := (m.width - 10) / 2
+		if weeksToShow < 20 {
+			weeksToShow = 20
+		}
+		if weeksToShow > 104 { // ~2 years
+			weeksToShow = 104
+		}
+		hm, err := m.deps.Heat.RecentWeeks(m.ctx, weeksToShow, time.Now())
 		if err != nil {
 			return errorMsg{err}
 		}
