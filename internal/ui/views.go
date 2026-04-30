@@ -247,21 +247,30 @@ func (m Model) viewWatchlist() string {
 	view.WriteString("\n\n")
 
 	lines := make([]string, 0)
-	lines = append(lines, renderTableHeader([]string{"Added", "Title / Notes"}, []int{12, 60}))
+	
+	if len(m.watchlist) == 0 {
+		lines = append(lines, "")
+		lines = append(lines, centerPad("Your watchlist is empty", 70))
+		lines = append(lines, "")
+		lines = append(lines, centerPad("Add films to watch later with: add --title \"Film Name\" --notes", 70))
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, renderTableHeader([]string{"Added", "Title / Notes"}, []int{12, 60}))
 
-	for i, item := range m.watchlist {
-		if i >= m.height-12 {
-			break
+		for i, item := range m.watchlist {
+			if i >= m.height-12 {
+				break
+			}
+			note := ""
+			if item.Notes != nil {
+				note = " | " + *item.Notes
+			}
+			row := renderTableRow([]string{item.AddedAt.In(time.Local).Format("2006-01-02"), item.Title + note}, []int{12, 60})
+			if i == m.selectedIndex {
+				row = selectedStyle.Render(row)
+			}
+			lines = append(lines, row)
 		}
-		note := ""
-		if item.Notes != nil {
-			note = " | " + *item.Notes
-		}
-		row := renderTableRow([]string{item.AddedAt.In(time.Local).Format("2006-01-02"), item.Title + note}, []int{12, 60})
-		if i == m.selectedIndex {
-			row = selectedStyle.Render(row)
-		}
-		lines = append(lines, row)
 	}
 
 	view.WriteString(renderCard("WATCHLIST", fmt.Sprintf("%d items", len(m.watchlist)), lines, coolColor))
@@ -277,21 +286,30 @@ func (m Model) viewLists() string {
 	view.WriteString("\n\n")
 
 	lines := make([]string, 0)
-	lines = append(lines, renderTableHeader([]string{"List", "Films"}, []int{60, 8}))
+	
+	if len(m.lists) == 0 {
+		lines = append(lines, "")
+		lines = append(lines, centerPad("No collections created yet", 70))
+		lines = append(lines, "")
+		lines = append(lines, centerPad("Create a collection with: lists create \"Collection Name\"", 70))
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, renderTableHeader([]string{"List", "Films"}, []int{60, 8}))
 
-	for i, list := range m.lists {
-		if i >= m.height-12 {
-			break
+		for i, list := range m.lists {
+			if i >= m.height-12 {
+				break
+			}
+			row := renderTableRow([]string{list.Name, fmt.Sprintf("%d", 0)}, []int{60, 8})
+			if i == m.selectedIndex {
+				row = selectedStyle.Render(row)
+			}
+			lines = append(lines, row)
 		}
-		row := renderTableRow([]string{list.Name, fmt.Sprintf("%d", 0)}, []int{60, 8})
-		if i == m.selectedIndex {
-			row = selectedStyle.Render(row)
-		}
-		lines = append(lines, row)
 	}
 
 	view.WriteString(renderCard("LISTS", fmt.Sprintf("%d collections", len(m.lists)), lines, warmColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  Enter: View  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
+	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
 
 	return view.String()
 }
