@@ -206,6 +206,7 @@ func (s *LetterboxdSyncService) SyncAndImportIfDue(ctx context.Context) (SyncImp
 var errSyncNotDue = errors.New("sync cooldown active")
 
 func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldown bool) (SyncImportResult, error) {
+	fmt.Printf("[Sync] Starting syncAndImport (ignoreCooldown=%t)\n", ignoreCooldown)
 	cfg, err := s.config.Load()
 	if err != nil {
 		return SyncImportResult{}, err
@@ -249,11 +250,22 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 	if err != nil {
 		return SyncImportResult{}, err
 	}
+	hashShort := hash
+	if len(hash) > 16 {
+		hashShort = hash[:16]
+	}
+	fmt.Printf("[Sync] Export hash: %s\n", hashShort)
 	cfg, err = s.config.Load()
 	if err != nil {
 		return SyncImportResult{}, err
 	}
+	lastHashShort := cfg.LastExportHash
+	if len(cfg.LastExportHash) > 16 {
+		lastHashShort = cfg.LastExportHash[:16]
+	}
+	fmt.Printf("[Sync] LastExportHash: %s (empty=%t)\n", lastHashShort, cfg.LastExportHash == "")
 	if cfg.LastExportHash != "" && cfg.LastExportHash == hash {
+		fmt.Printf("[Sync] ✓ Hash matches last sync - skipping import (no new data)\n")
 		cfg.SyncCooldownUntil = s.now().Add(defaultSyncCooldown).UTC().Format(time.RFC3339)
 		if err := s.config.Save(cfg); err != nil {
 			return SyncImportResult{}, err
@@ -263,10 +275,13 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash, WatchlistAdded: watchAdded}, nil
 	}
 
+	fmt.Printf("[Sync] ✗ New data detected - importing CSV from: %s\n", dlRes.ImportPath)
 	res, err := s.csvSvc.ImportLetterboxd(ctx, dlRes.ImportPath)
 	if err != nil {
+		fmt.Printf("[Sync] CSV import error: %v\n", err)
 		return SyncImportResult{}, err
 	}
+	fmt.Printf("[Sync] CSV import returned: imported=%d, skipped=%d\n", res.Imported, res.Skipped)
 	cfg.LastSyncAt = s.now().UTC().Format(time.RFC3339)
 	cfg.LastExportHash = hash
 	cfg.SyncCooldownUntil = s.now().Add(defaultSyncCooldown).UTC().Format(time.RFC3339)
