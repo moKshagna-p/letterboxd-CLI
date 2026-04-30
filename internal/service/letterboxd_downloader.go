@@ -346,6 +346,7 @@ func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Cli
 
 func (d *LetterboxdDownloader) scrapeDiaryRSS(ctx context.Context, client *http.Client, username string) ([]scrapedDiaryEntry, error) {
 	u := fmt.Sprintf("https://letterboxd.com/%s/rss/", strings.TrimSpace(username))
+	fmt.Printf("[Scraper] Falling back to RSS: %s\n", u)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -353,17 +354,21 @@ func (d *LetterboxdDownloader) scrapeDiaryRSS(ctx context.Context, client *http.
 	req.Header.Set("User-Agent", d.userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Printf("[Scraper] RSS fetch error: %v\n", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Printf("[Scraper] RSS HTTP %s\n", resp.Status)
 		return nil, fmt.Errorf("rss fetch failed: %s", resp.Status)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
 	if err != nil {
 		return nil, err
 	}
-	return parseDiaryEntriesFromRSS(string(b)), nil
+	entries := parseDiaryEntriesFromRSS(string(b))
+	fmt.Printf("[Scraper] RSS: scraped %d entries\n", len(entries))
+	return entries, nil
 }
 
 func (d *LetterboxdDownloader) fetchHTML(ctx context.Context, client *http.Client, target string) (string, error) {
@@ -504,7 +509,9 @@ func parseDiaryEntriesFromHTML(page string) []scrapedDiaryEntry {
 	ratingRe := regexp.MustCompile(`(?is)<td[^>]*td-rating[^>]*>\s*([^<]+)\s*</td>`)
 	out := make([]scrapedDiaryEntry, 0, 128)
 
-	for _, row := range rowRe.FindAllStringSubmatch(page, -1) {
+	rows := rowRe.FindAllStringSubmatch(page, -1)
+	fmt.Printf("[Scraper] HTML: found %d diary-entry-row matches\n", len(rows))
+	for _, row := range rows {
 		block := row[1]
 		tm := titleRe.FindStringSubmatch(block)
 		if len(tm) < 3 {
@@ -552,11 +559,15 @@ func parseDiaryEntriesFromHTML(page string) []scrapedDiaryEntry {
 	}
 
 	if len(out) > 0 {
+		fmt.Printf("[Scraper] HTML: parsed %d entries from diary-entry-row\n", len(out))
 		return out
 	}
 
+	fmt.Printf("[Scraper] HTML: diary-entry-row failed, trying data-film-name fallback\n")
 	dataCardRe := regexp.MustCompile(`(?is)<[^>]*data-film-name="([^"]+)"[^>]*data-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"[^>]*>`)
-	for _, m := range dataCardRe.FindAllStringSubmatch(page, -1) {
+	dataMatches := dataCardRe.FindAllStringSubmatch(page, -1)
+	fmt.Printf("[Scraper] HTML: found %d data-film-name matches\n", len(dataMatches))
+	for _, m := range dataMatches {
 		if len(m) < 3 {
 			continue
 		}
