@@ -4,7 +4,7 @@ A local-first film logging tool with a beautiful terminal interface and GitHub-s
 
 ![Heatmap Preview](https://github.com/moKshagna-p/letterboxd-TUI-Heatmap/raw/v2/docs/assets/heatmap-preview.png) *(Placeholder for your preview image)*
 
-## ✨ What's New in v0.2.0
+## ✨ What's New in v0.1.4
 
 - **🚀 Resilient Scraper:** Completely rebuilt to handle Letterboxd's latest HTML changes.
 - **📁 Detailed List Sync:** Now scrapes and stores individual films within your custom collections.
