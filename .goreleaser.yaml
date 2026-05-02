@@ -56,3 +56,14 @@ brews:
 
 snapshot:
   version_template: "{{ .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+      - "^feat: Prepare release"

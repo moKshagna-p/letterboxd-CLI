@@ -1,121 +1,115 @@
-# letterboxd-tui
+# 🎥 Letterboxd TUI & CLI
 
-Local-first film logging and GitHub-style daily heatmap.
+A local-first film logging tool with a beautiful terminal interface and GitHub-style daily heatmap. Sync your entire Letterboxd profile—diary, watchlist, and custom lists—directly to your terminal.
 
-## Install
+![Heatmap Preview](https://github.com/moKshagna-p/letterboxd-TUI-Heatmap/raw/v2/docs/assets/heatmap-preview.png) *(Placeholder for your preview image)*
 
-macOS:
+## ✨ What's New in v0.2.0
+
+- **🚀 Resilient Scraper:** Completely rebuilt to handle Letterboxd's latest HTML changes.
+- **📁 Detailed List Sync:** Now scrapes and stores individual films within your custom collections.
+- **📜 TUI Scrolling:** Navigate through thousands of films effortlessly with full scrolling support and visual indicators.
+- **✍️ Enhanced Reviews:** View your film notes and commentary directly in the TUI (Shortcut: `2`).
+- **🔄 Functional Refresh:** Trigger a full Letterboxd sync anytime by pressing `r` in the UI.
+
+---
+
+## 🚀 How to Setup & Login
+
+### 1. Installation
+
+**macOS (Recommended):**
 ```bash
 brew install moKshagna-p/tap/letterboxd-tui
 ```
 
-Linux:
+**Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/v2/scripts/install.sh | sudo sh
 ```
 
-Windows PowerShell:
+**Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/moKshagna-p/letterboxd-TUI-Heatmap/v2/scripts/install.ps1 | iex
 ```
 
-## Quick start
+### 2. Authentication (One-time Setup)
+
+To access your private data (watchlist, lists, reviews), you need to login:
+
+1.  Open your terminal.
+2.  Run the login command:
+    ```bash
+    letterboxd-tui auth login
+    ```
+3.  Enter your **Letterboxd Username** and **Password** when prompted.
+4.  The app will validate your credentials and save them securely in your local configuration.
+
+### 3. Sync Your Data
+
+Fetch your entire history from Letterboxd:
 ```bash
-cd path_of_the_file
-make test
-make install-local
-export PATH="$PWD/bin:$PATH"
-```
-
-After that, you can run:
-```bash
-letterboxd-tui
-```
-
-`letterboxd-tui` opens the interactive TUI by default.
-On first launch, it asks for your Letterboxd username and password, validates them, saves them locally, syncs your data, and then opens the TUI.
-On later launches, it skips the credential prompt and opens the TUI directly.
-
-## Behavior you asked for
-- Auto-sync uses authenticated Letterboxd scraping (no repeated manual export download flow).
-- `auth login` asks for your Letterboxd username/password one time and validates them.
-- `refresh` or `import letterboxd --auto` scrapes diary data, compares to last fetch hash, and imports only if changed.
-- `lbstats` scrapes your Letterboxd account on demand and lets you choose which feature to view (`watched`, `reviews`, `watchlist`, `lists`, `tags`, `heatmap`, or all).
-- On first `lbstats` run, the app asks for username/password once, validates credentials, and stores them locally.
-- On later `lbstats` runs, it scrapes again and only refreshes cached feature data if content changed.
-- TUI data commands trigger sync checks automatically when auto-sync is enabled.
-- Watchlist sync uses public watchlist page scrape fallback.
-- If auto-sync is not configured, the app falls back to manual import (ZIP or diary CSV).
-- After import, `letterboxd-tui` opens the interactive CLI studio.
-
-## Commands
-```bash
-letterboxd-tui add --title "Inception" --date 2026-02-20 --rating 4.5
-letterboxd-tui list --from 2026-01-01 --to 2026-12-31
-letterboxd-tui heatmap --year 2026
-letterboxd-tui stats --year 2026
-letterboxd-tui ui
-letterboxd-tui help backend
-letterboxd-tui help features
-letterboxd-tui auth login
-letterboxd-tui auth status
-letterboxd-tui auth logout
 letterboxd-tui refresh
-letterboxd-tui lbstats
-letterboxd-tui lbstats --view watched
-letterboxd-tui lbstats --view heatmap
-letterboxd-tui import letterboxd --auto
-letterboxd-tui import letterboxd --file /path/to/letterboxd-export.zip
-letterboxd-tui import csv --file /path/to/logs.csv
-letterboxd-tui export csv --file /path/to/out.csv --year 2026
+```
+*Note: The first sync might take a minute if you have a very large diary.*
+
+### 4. Launch the UI
+
+Start exploring your film library:
+```bash
+letterboxd-tui ui
+```
+
+---
+
+## 🎮 TUI Shortcuts
+
+Once inside the UI, use these keys to navigate:
+
+- **`1`**: **Watched** - Your recently logged films (look for `✎` for reviews).
+- **`2`**: **Reviews** - Read your notes and commentary. Press `Enter` on a film to read the full note.
+- **`3`**: **Heatmap** - Your visual activity map.
+- **`4`**: **Stats** - Your annual overview and streaks.
+- **`5`**: **Watchlist** - Your planned watches.
+- **`6`**: **Collections** - Your Letterboxd lists. Highlight one and press `Enter` to see its films.
+- **`r`**: **Refresh** - Trigger a live sync from Letterboxd.
+- **`↑ / ↓`** or **`j / k`**: Scroll through lists.
+- **`q`** or **`Esc`**: Go back or quit.
+- **`?`**: Show help message.
+
+---
+
+## 🛠 Advanced CLI Commands
+
+You can also use `letterboxd-tui` as a powerful CLI tool:
+
+```bash
+# Add a film manually
+letterboxd-tui add --title "Inception" --date 2026-02-20 --rating 4.5
+
+# Search your local logs
+letterboxd-tui list --from 2026-01-01 --title "Alien"
+
+# Check auth status
+letterboxd-tui auth status
+
+# Import from an official Letterboxd .zip export
+letterboxd-tui import letterboxd --file ~/Downloads/letterboxd-user-export.zip
+
+# Remove exact duplicate logs
 letterboxd-tui dedupe
 ```
 
-## Account commands
-```bash
-# Logout current app session
-letterboxd-tui auth logout
+---
 
-# Login once with credentials
-letterboxd-tui auth login
+## ⚙️ Configuration
 
-# Refresh latest data now
-letterboxd-tui refresh
-```
+- **Database:** Defaults to `letterboxd-tui.db` in your current directory.
+- **Environment Variables:**
+  - `LETTERBOXD_TUI_DB`: Set an absolute path to your database file.
+  - `LETTERBOXD_TUI_AUTO_SYNC`: Set to `true` to sync automatically on launch.
 
-## Interactive UI commands
-Inside `letterboxd-tui` or `letterboxd-tui ui`:
-```bash
-watched
-ratings
-reviews
-lbstats
-watchlist
-watchlist add "Chungking Express" --notes "Weekend"
-watchlist rm <item-id>
-lists
-lists create "Neo-Noir Essentials"
-lists add <list-id> "Heat" --notes "Rewatch soon"
-lists view <list-id>
-heatmap
-stats
-```
+---
 
-Default DB path: `letterboxd-tui.db` in current directory.
-Override with:
-```bash
-export LETTERBOXD_TUI_DB=/absolute/path/to.db
-```
-
-## Auto-sync config
-```bash
-export LETTERBOXD_TUI_AUTO_SYNC=true
-export LETTERBOXD_TUI_CONFIG=/absolute/path/to/config.json
-```
-
-Legacy `FILM_HEATMAP_*` environment variables still work for compatibility.
-
-## Distribution
-
-See [docs/distribution.md](docs/distribution.md) for the Homebrew and cross-platform packaging plan.
-See [docs/release-checklist.md](docs/release-checklist.md) for the exact steps to publish a release.
+## 📄 License
+MIT License. See [LICENSE](LICENSE) for details.
