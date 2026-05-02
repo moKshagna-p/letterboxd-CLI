@@ -60,12 +60,11 @@ func (m Model) viewMainMenu() string {
 
 	options := []string{
 		"1  Watched   - Your recently logged films",
-		"2  Ratings   - Your top-rated watches",
-		"3  Reviews   - Notes & commentary",
-		"4  Heatmap   - Visual activity map",
-		"5  Stats     - Year overview",
-		"6  Watchlist - Planned watches",
-		"7  Lists     - Collections",
+		"2  Reviews   - Notes & commentary",
+		"3  Heatmap   - Visual activity map",
+		"4  Stats     - Year overview",
+		"5  Watchlist - Planned watches",
+		"6  Lists     - Collections",
 	}
 
 	menu.WriteString(renderCard("MENU", "Choose a view", options, accentColor))
@@ -119,45 +118,6 @@ func (m Model) viewWatched() string {
 	return view.String()
 }
 
-// viewRatings renders the ratings view
-func (m Model) viewRatings() string {
-	view := strings.Builder{}
-	view.WriteString(renderBanner("RATINGS DESK", "Top-rated films"))
-	view.WriteString("\n\n")
-
-	visibleHeight := m.height - 15
-	if visibleHeight < 1 {
-		visibleHeight = 1
-	}
-
-	lines := make([]string, 0)
-	lines = append(lines, renderTableHeader([]string{"Score", "Date", "Title"}, []int{8, 12, 50}))
-
-	if m.scrollOffset > 0 {
-		lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
-	} else {
-		lines = append(lines, "")
-	}
-
-	for i := m.scrollOffset; i < len(m.ratings) && i < m.scrollOffset+visibleHeight; i++ {
-		log := m.ratings[i]
-		score := fmt.Sprintf("%.1f★", *log.Rating)
-		row := renderTableRow([]string{score, log.LocalDate, log.Title}, []int{8, 12, 50})
-		if i == m.selectedIndex {
-			row = selectedStyle.Render(row)
-		}
-		lines = append(lines, row)
-	}
-
-	if m.scrollOffset+visibleHeight < len(m.ratings) {
-		lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
-	}
-
-	view.WriteString(renderCard("RATINGS", fmt.Sprintf("%d rated films", len(m.ratings)), lines, warmColor))
-	view.WriteString("\n" + dimStyle.Render("↑↓: Navigate  │  q/Esc: Back  │  1-7: Menu  │  r: Refresh"))
-
-	return view.String()
-}
 
 // viewReviews renders the reviews view
 func (m Model) viewReviews() string {

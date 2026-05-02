@@ -100,13 +100,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewWatched
 		m.loading = false
 		return m, nil
-	case loadRatingsMsg:
-		m.ratings = msg.logs
-		m.selectedIndex = 0
-		m.scrollOffset = 0
-		m.currentView = ViewRatings
-		m.loading = false
-		return m, nil
 	case loadReviewsMsg:
 		m.reviews = msg.logs
 		m.selectedIndex = 0
@@ -181,8 +174,6 @@ func (m Model) View() string {
 		content = m.viewMainMenu()
 	case ViewWatched:
 		content = m.viewWatched()
-	case ViewRatings:
-		content = m.viewRatings()
 	case ViewReviews:
 		content = m.viewReviews()
 	case ViewHeatmap:
@@ -260,16 +251,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		return m, m.loadWatched()
 	case "2":
-		return m, m.loadRatings()
-	case "3":
 		return m, m.loadReviews()
-	case "4":
+	case "3":
 		return m, m.loadHeatmap()
-	case "5":
+	case "4":
 		return m, m.loadStats()
-	case "6":
+	case "5":
 		return m, m.loadWatchlist()
-	case "7":
+	case "6":
 		return m, m.loadLists()
 
 	case "r":
@@ -281,7 +270,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "?":
-		m.message = "↑↓/jk: Navigate  │  1-7: Menu  │  Home: Menu  │  q/Esc: Back  │  r: Refresh  │  Ctrl+C: Quit"
+		m.message = "↑↓/jk: Navigate  │  1-6: Menu  │  Home: Menu  │  q/Esc: Back  │  r: Refresh  │  Ctrl+C: Quit"
 		m.messageTime = time.Now()
 		return m, nil
 	}
@@ -293,8 +282,6 @@ func (m Model) getMaxIndex() int {
 	switch m.currentView {
 	case ViewWatched:
 		return len(m.watched)
-	case ViewRatings:
-		return len(m.ratings)
 	case ViewReviews:
 		return len(m.reviews)
 	case ViewWatchlist:
@@ -310,7 +297,6 @@ func (m Model) getMaxIndex() int {
 
 // Message types for asynchronous operations
 type loadWatchedMsg struct{ logs []domain.FilmLog }
-type loadRatingsMsg struct{ logs []domain.FilmLog }
 type loadReviewsMsg struct{ logs []domain.FilmLog }
 type loadHeatmapMsg struct{ heatmap domain.HeatmapMatrix }
 type loadStatsMsg struct{ stats domain.YearStats }
@@ -330,23 +316,6 @@ func (m Model) loadWatched() tea.Cmd {
 			return errorMsg{err}
 		}
 		return loadWatchedMsg{logs}
-	}
-}
-
-func (m Model) loadRatings() tea.Cmd {
-	return func() tea.Msg {
-		logs, err := m.deps.Logs.List(m.ctx, domain.ListFilter{})
-		if err != nil {
-			return errorMsg{err}
-		}
-		// Filter rated only
-		var rated []domain.FilmLog
-		for _, l := range logs {
-			if l.Rating != nil {
-				rated = append(rated, l)
-			}
-		}
-		return loadRatingsMsg{rated}
 	}
 }
 

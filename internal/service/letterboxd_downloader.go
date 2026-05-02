@@ -43,6 +43,7 @@ type scrapedDiaryEntry struct {
 	FilmPath string
 	Rating   string
 	Rewatch  bool
+	Notes    string
 }
 
 type LetterboxdSnapshot struct {
@@ -493,12 +494,77 @@ func (d *LetterboxdDownloader) scrapeDiary(ctx context.Context, client *http.Cli
 			fmt.Printf("[Scraper] Diary page %d: found next page link\n", page)
 		}
 	}
-	fmt.Printf("[Scraper] Diary: scraped %d total unique entries across pages\n", len(all))
+	
 	if len(all) > 0 {
+		fmt.Printf("[Scraper] Diary: scraped %d total entries, now fetching reviews for notes...\n", len(all))
+		// Fetch review snippets to enrich diary entries
+		reviewsMap := d.scrapeReviews(ctx, client, username)
+		if len(reviewsMap) > 0 {
+			for i := range all {
+				key := fmt.Sprintf("%s|%s", all[i].Title, all[i].Date)
+				if note, ok := reviewsMap[key]; ok {
+					all[i].Notes = note
+				}
+			}
+		}
 		return all, nil
 	}
+
 	fmt.Printf("[Scraper] Diary scraping found no pages, falling back to RSS\n")
 	return d.scrapeDiaryRSS(ctx, client, username)
+}
+
+func (d *LetterboxdDownloader) scrapeReviews(ctx context.Context, client *http.Client, username string) map[string]string {
+	out := make(map[string]string)
+	next := fmt.Sprintf("https://letterboxd.com/%s/films/reviews/", username)
+	
+	// We only check the first 5 pages of reviews to avoid excessive requests, 
+	// assuming recent diary entries are most likely to have reviews.
+	for pageNum := 0; pageNum < 5 && next != ""; pageNum++ {
+		page, err := d.fetchHTML(ctx, client, next)
+		if err != nil {
+			break
+		}
+		
+		// Each review block is usually in a <div class="film-detail-content">
+		re := regexp.MustCompile(`(?is)<div[^>]*film-detail-content[^>]*>(.*?)</div>\s*</div>`)
+		matches := re.FindAllStringSubmatch(page, -1)
+		
+		foundOnPage := 0
+		for _, m := range matches {
+			block := m[1]
+			title := ""
+			// Title is usually in a h2 or h3 link
+			if tm := regexp.MustCompile(`(?is)<h[1-6][^>]*>\s*<a[^>]*>(.*?)</a>`).FindStringSubmatch(block); len(tm) >= 2 {
+				title = strings.TrimSpace(stripHTML(tm[1]))
+			}
+			
+			date := ""
+			// Logged date is in data-viewing-date-str
+			if dm := regexp.MustCompile(`\bdata-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"`).FindStringSubmatch(block); len(dm) >= 2 {
+				date = dm[1]
+			}
+			
+			review := ""
+			// Review body is in class body-text
+			if rm := regexp.MustCompile(`(?is)<div[^>]*body-text[^>]*>(.*?)</div>`).FindStringSubmatch(block); len(rm) >= 2 {
+				review = strings.TrimSpace(stripHTML(rm[1]))
+			}
+			
+			if title != "" && date != "" && review != "" {
+				key := fmt.Sprintf("%s|%s", title, date)
+				out[key] = review
+				foundOnPage++
+			}
+		}
+		
+		fmt.Printf("[Scraper] Reviews page %d: found %d review snippets\n", pageNum, foundOnPage)
+		next = findNextPageURL(next, page)
+		if next != "" {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	return out
 }
 
 func (d *LetterboxdDownloader) scrapeDiaryRSS(ctx context.Context, client *http.Client, username string) ([]scrapedDiaryEntry, error) {
@@ -575,7 +641,8 @@ func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
 	}
 	defer f.Close()
 	w := csv.NewWriter(f)
-	if err := w.Write([]string{"Date", "Name", "Year", "Letterboxd URI", "Rating", "Rewatch", "Tags", "Watched Date"}); err != nil {
+	// Letterboxd format: Date, Name, Year, Letterboxd URI, Rating, Rewatch, Tags, Watched Date, Review
+	if err := w.Write([]string{"Date", "Name", "Year", "Letterboxd URI", "Rating", "Rewatch", "Tags", "Watched Date", "Review"}); err != nil {
 		fmt.Printf("[Scraper] Failed to write CSV header: %v\n", err)
 		return err
 	}
@@ -593,7 +660,7 @@ func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
 		if r.FilmPath != "" {
 			uri = "https://letterboxd.com" + r.FilmPath
 		}
-		if err := w.Write([]string{r.Date, r.Title, r.Year, uri, r.Rating, rewatch, "", r.Date}); err != nil {
+		if err := w.Write([]string{r.Date, r.Title, r.Year, uri, r.Rating, rewatch, "", r.Date, r.Notes}); err != nil {
 			fmt.Printf("[Scraper] Failed to write row: %v\n", err)
 			return err
 		}
@@ -857,6 +924,20 @@ func parseDiaryEntriesFromRSS(feed string) []scrapedDiaryEntry {
 		}
 		rating := strings.TrimSpace(textFromTag(block, "letterboxd:memberRating"))
 		rewatch := strings.EqualFold(strings.TrimSpace(textFromTag(block, "letterboxd:rewatch")), "yes")
+		
+		// Extract review from description
+		notes := ""
+		if desc := textFromTag(block, "description"); desc != "" {
+			// Letterboxd RSS description starts with a poster image <img>, then review text.
+			// Example: <p><img src="..."/></p> <p>Review text...</p>
+			// We'll strip HTML to get the text.
+			notes = strings.TrimSpace(stripHTML(desc))
+			// If it's just "Watched on ...", it's not a review.
+			if strings.HasPrefix(notes, "Watched on ") {
+				notes = ""
+			}
+		}
+
 		filmPath := ""
 		if link := strings.TrimSpace(textFromTag(block, "link")); link != "" {
 			if u, err := url.Parse(link); err == nil {
@@ -869,6 +950,7 @@ func parseDiaryEntriesFromRSS(feed string) []scrapedDiaryEntry {
 			FilmPath: filmPath,
 			Rating:   rating,
 			Rewatch:  rewatch,
+			Notes:    notes,
 		})
 	}
 	return out
