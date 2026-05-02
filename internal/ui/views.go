@@ -101,7 +101,12 @@ func (m Model) viewWatched() string {
 			rating = fmt.Sprintf("%.1f★", *log.Rating)
 		}
 
-		row := renderTableRow([]string{log.LocalDate, rating, log.Title}, []int{12, 8, 50})
+		title := log.Title
+		if log.Notes != nil && *log.Notes != "" {
+			title += " ✎"
+		}
+
+		row := renderTableRow([]string{log.LocalDate, rating, title}, []int{12, 8, 50})
 		if i == m.selectedIndex {
 			row = selectedStyle.Render(row)
 		}
