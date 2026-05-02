@@ -113,8 +113,8 @@ func (d *dependencies) autoSyncIfConfigured(ctx context.Context) {
 	if err != nil || !ran {
 		return // silently skip — non-critical, cached data is available
 	}
-	if res.ImportResult.Imported > 0 || res.WatchlistAdded > 0 {
-		fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
+	if res.ImportResult.Imported > 0 || res.WatchlistAdded > 0 || res.ListsAdded > 0 {
+		fmt.Printf("auto-import complete: imported=%d skipped=%d watchlist_added=%d lists_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded, res.ListsAdded)
 	}
 }
 
@@ -165,10 +165,11 @@ func (d *dependencies) syncOnLaunch(ctx context.Context, force bool) {
 	if !ran {
 		return
 	}
-	if res.ImportResult.Imported > 0 || res.ImportResult.Skipped > 0 || res.WatchlistAdded > 0 {
-		fmt.Printf("launch sync complete: imported=%d skipped=%d watchlist_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded)
+	if res.ImportResult.Imported > 0 || res.ImportResult.Skipped > 0 || res.WatchlistAdded > 0 || res.ListsAdded > 0 {
+		fmt.Printf("launch sync complete: imported=%d skipped=%d watchlist_added=%d lists_added=%d\n", res.ImportResult.Imported, res.ImportResult.Skipped, res.WatchlistAdded, res.ListsAdded)
 	}
 }
+
 
 func (d *dependencies) run(args []string) error {
 	if len(args) == 0 {
@@ -477,6 +478,7 @@ func (d *dependencies) run(args []string) error {
 		fmt.Printf("  Films imported:      %d\n", res.ImportResult.Imported)
 		fmt.Printf("  Films skipped:       %d\n", res.ImportResult.Skipped)
 		fmt.Printf("  Watchlist items:     %d\n", res.WatchlistAdded)
+		fmt.Printf("  List items:          %d\n", res.ListsAdded)
 		fmt.Println()
 		fmt.Println("View your data:")
 		fmt.Println("  • Lists:        make ui  →  press 1 (Watched Films)")

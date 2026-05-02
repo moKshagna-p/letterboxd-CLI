@@ -468,29 +468,90 @@ func (s *LetterboxdSyncService) syncLists(ctx context.Context, zipPath string) (
 	if s.lib == nil {
 		return 0, nil
 	}
-	var names []string
-	var err error
+	
+	// Format: map[ListName][]FilmTitle
+	listData := make(map[string][]string)
+	
 	if strings.EqualFold(filepath.Ext(zipPath), ".zip") {
-		names, err = parseListsFromExportZip(zipPath)
-		if err != nil {
-			return 0, err
-		}
+		// Official export handling would go here, for now we skip items from zip
+		names, _ := parseListsFromExportZip(zipPath)
+		return s.lib.SyncListNames(ctx, names)
 	} else {
-		// Try to find lists-scrape.csv in the same directory
+		// Scraper result handling
 		dir := filepath.Dir(zipPath)
 		listsPath := filepath.Join(dir, "lists-scrape.csv")
 		if _, err := os.Stat(listsPath); err == nil {
 			f, err := os.Open(listsPath)
 			if err == nil {
 				defer f.Close()
-				names, _ = parseListsCSV(f)
+				listData, _ = parseDetailedListsCSV(f)
 			}
 		}
 	}
-	if len(names) == 0 {
+	
+	if len(listData) == 0 {
 		return 0, nil
 	}
-	return s.lib.SyncListNames(ctx, names)
+	
+	totalAdded := 0
+	for name, films := range listData {
+		added, err := s.lib.SyncListItems(ctx, name, films)
+		if err == nil {
+			totalAdded += added
+		}
+	}
+	return totalAdded, nil
+}
+
+func parseDetailedListsCSV(r io.Reader) (map[string][]string, error) {
+	cr := csv.NewReader(r)
+	head, err := cr.Read()
+	if err != nil {
+		return nil, err
+	}
+	
+	listIdx := -1
+	filmIdx := -1
+	for i, h := range head {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "listname" {
+			listIdx = i
+		} else if h == "filmtitle" {
+			filmIdx = i
+		}
+	}
+	
+	if listIdx < 0 || filmIdx < 0 {
+		return nil, errors.New("invalid detailed lists csv format")
+	}
+	
+	data := make(map[string][]string)
+	for {
+		row, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if listIdx >= len(row) || filmIdx >= len(row) {
+			continue
+		}
+		
+		listName := strings.TrimSpace(row[listIdx])
+		filmTitle := strings.TrimSpace(row[filmIdx])
+		
+		if listName == "" {
+			continue
+		}
+		
+		if filmTitle != "" {
+			data[listName] = append(data[listName], filmTitle)
+		} else if _, ok := data[listName]; !ok {
+			data[listName] = []string{}
+		}
+	}
+	return data, nil
 }
 
 func parseListsFromExportZip(zipPath string) ([]string, error) {

@@ -110,23 +110,143 @@ func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, creds L
 		}
 	}
 	
-	// Also scrape and save lists
+	// Also scrape and save lists with content
 	fmt.Printf("[Downloader] Scraping lists...\n")
-	lists, err := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/lists/", username), []string{
-		`<h2[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*>(.*?)</a>`,
-		`<a[^>]*href="/%s/list/[^"]+"[^>]*>(.*?)</a>`,
-	})
+	lists, err := d.scrapeListsDetailed(ctx, client, username)
 	if err != nil {
 		fmt.Printf("[Downloader] Lists scrape error: %v\n", err)
 	} else if len(lists) > 0 {
 		listsOut := filepath.Join(outDir, "lists-scrape.csv")
-		if err := writeScrapedListsCSV(listsOut, lists); err != nil {
+		if err := writeScrapedListsDetailedCSV(listsOut, lists); err != nil {
 			fmt.Printf("[Downloader] Failed to write lists CSV: %v\n", err)
 		}
 	}
 	
 	return DownloadedExport{ImportPath: out, SourcePath: ""}, nil
 }
+
+type scrapedList struct {
+	Name string
+	Slug string
+	Films []string
+}
+
+func (d *LetterboxdDownloader) scrapeListsDetailed(ctx context.Context, client *http.Client, username string) ([]scrapedList, error) {
+	target := fmt.Sprintf("https://letterboxd.com/%s/lists/", username)
+	fmt.Printf("[Scraper] Fetching lists from: %s\n", target)
+	page, err := d.fetchHTML(ctx, client, target)
+	if err != nil {
+		fmt.Printf("[Scraper] Lists fetch error: %v\n", err)
+		return nil, err
+	}
+	
+	// Pattern to find list links and names: <h2 class="name prettify"><a href="/username/list/slug/">Name</a></h2>
+	// Flexible pattern for h1-h6 and various classes (title, name, etc.)
+	re := regexp.MustCompile(`(?is)<h[1-6][^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	matches := re.FindAllStringSubmatch(page, -1)
+	
+	if len(matches) == 0 {
+		// Look for ANY link that looks like a list link
+		re = regexp.MustCompile(`(?is)<a[^>]*href="([^"]*/list/[^"]+/)"[^>]*>(.*?)</a>`)
+		matches = re.FindAllStringSubmatch(page, -1)
+	}
+
+	var lists []scrapedList
+	seenSlugs := make(map[string]bool)
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		slug := strings.TrimSpace(m[1])
+		name := strings.TrimSpace(stripHTML(m[2]))
+		
+		if !strings.Contains(slug, "/list/") || seenSlugs[slug] {
+			continue
+		}
+		
+		// Filter out common non-list links that might contain /list/
+		if strings.Contains(slug, "/lists/by/") || strings.Contains(slug, "/lists/with/") {
+			continue
+		}
+		seenSlugs[slug] = true
+		
+		fmt.Printf("[Scraper] Scraping list: %s (%s)\n", name, slug)
+		// Small delay to avoid rate limit
+		time.Sleep(500 * time.Millisecond)
+		
+		films, err := d.scrapeListItems(ctx, client, "https://letterboxd.com"+slug)
+		if err != nil {
+			fmt.Printf("[Scraper] Error scraping items for list %s: %v\n", name, err)
+			continue
+		}
+		lists = append(lists, scrapedList{Name: name, Slug: slug, Films: films})
+	}
+	return lists, nil
+}
+
+func (d *LetterboxdDownloader) scrapeListItems(ctx context.Context, client *http.Client, listURL string) ([]string, error) {
+	var films []string
+	next := listURL
+	for pageNum := 0; pageNum < 50 && next != ""; pageNum++ {
+		page, err := d.fetchHTML(ctx, client, next)
+		if err != nil {
+			return films, err
+		}
+		
+		// Try multiple patterns for film names
+		patterns := []string{
+			`data-film-name="([^"]+)"`,
+			`class="frame-title">([^<]+)</span>`,
+			`alt="([^"]+)" class="image"`,
+		}
+		
+		for _, p := range patterns {
+			re := regexp.MustCompile(p)
+			matches := re.FindAllStringSubmatch(page, -1)
+			for _, m := range matches {
+				if len(m) >= 2 {
+					films = append(films, html.UnescapeString(m[1]))
+				}
+			}
+		}
+		
+		next = findNextPageURL(next, page)
+		if next != "" {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	return uniqueTitles(films), nil
+}
+
+func writeScrapedListsDetailedCSV(path string, lists []scrapedList) error {
+	fmt.Printf("[Scraper] Writing %d detailed lists to CSV: %s\n", len(lists), path)
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	// We'll use a format: ListName, FilmTitle
+	if err := w.Write([]string{"ListName", "FilmTitle"}); err != nil {
+		return err
+	}
+	for _, l := range lists {
+		for _, film := range l.Films {
+			if err := w.Write([]string{l.Name, film}); err != nil {
+				return err
+			}
+		}
+		// Also write an empty entry if the list is empty just to record the name
+		if len(l.Films) == 0 {
+			if err := w.Write([]string{l.Name, ""}); err != nil {
+				return err
+			}
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
 
 func (d *LetterboxdDownloader) ValidateCredentials(ctx context.Context, creds LetterboxdCredentials) error {
 	if err := validateScrapeCreds(creds); err != nil {
@@ -519,36 +639,6 @@ func writeScrapedWatchlistCSV(path string, titles []string) error {
 	return nil
 }
 
-func writeScrapedListsCSV(path string, lists []string) error {
-	fmt.Printf("[Scraper] Writing %d list names to CSV: %s\n", len(lists), path)
-	f, err := os.Create(path)
-	if err != nil {
-		fmt.Printf("[Scraper] Failed to create lists CSV file: %v\n", err)
-		return err
-	}
-	defer f.Close()
-	w := csv.NewWriter(f)
-	if err := w.Write([]string{"Name"}); err != nil {
-		fmt.Printf("[Scraper] Failed to write lists CSV header: %v\n", err)
-		return err
-	}
-	for _, listName := range lists {
-		if listName == "" {
-			continue
-		}
-		if err := w.Write([]string{listName}); err != nil {
-			fmt.Printf("[Scraper] Failed to write lists row: %v\n", err)
-			return err
-		}
-	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		fmt.Printf("[Scraper] Lists CSV writer error: %v\n", err)
-		return err
-	}
-	fmt.Printf("[Scraper] Successfully wrote %d lists to CSV\n", len(lists))
-	return nil
-}
 
 func parseLoginForm(page string) (string, string, string, url.Values) {
 	formRe := regexp.MustCompile(`(?is)<form[^>]*action="([^"]*login[^"]*)"[^>]*>(.*?)</form>`)

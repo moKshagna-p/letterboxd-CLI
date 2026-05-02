@@ -95,6 +95,59 @@ func (s *LibraryService) SyncListNames(ctx context.Context, names []string) (int
 	return added, nil
 }
 
+func (s *LibraryService) SyncListItems(ctx context.Context, listName string, titles []string) (int, error) {
+	lists, err := s.store.ListFilmLists(ctx)
+	if err != nil {
+		return 0, err
+	}
+	
+	var listID string
+	for _, l := range lists {
+		if strings.EqualFold(l.Name, listName) {
+			listID = l.ID
+			break
+		}
+	}
+	
+	if listID == "" {
+		nl, err := s.store.AddFilmList(ctx, domain.AddFilmListInput{Name: listName})
+		if err != nil {
+			return 0, err
+		}
+		listID = nl.ID
+	}
+
+	existing, err := s.store.ListFilmListItems(ctx, listID)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]struct{}{}
+	for _, item := range existing {
+		seen[strings.ToLower(strings.TrimSpace(item.Title))] = struct{}{}
+	}
+
+	added := 0
+	for _, title := range titles {
+		k := strings.ToLower(strings.TrimSpace(title))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		_, err := s.store.AddFilmListItem(ctx, domain.AddFilmListItemInput{
+			ListID: listID,
+			Title:  title,
+		})
+		if err == nil {
+			added++
+			seen[k] = struct{}{}
+		}
+	}
+	return added, nil
+}
+
+
 func (s *LibraryService) AddListItem(ctx context.Context, input domain.AddFilmListItemInput) (domain.FilmListItem, error) {
 	return s.store.AddFilmListItem(ctx, input)
 }

@@ -274,6 +274,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		return m, m.refreshData()
+	case "enter":
+		if m.currentView == ViewLists && m.selectedIndex < len(m.lists) {
+			list := m.lists[m.selectedIndex]
+			return m, m.loadListItems(list.ID, list.Name)
+		}
+		return m, nil
 	case "?":
 		m.message = "↑↓/jk: Navigate  │  1-7: Menu  │  Home: Menu  │  q/Esc: Back  │  r: Refresh  │  Ctrl+C: Quit"
 		m.messageTime = time.Now()
