@@ -81,13 +81,22 @@ func (m Model) viewWatched() string {
 	view.WriteString(renderBanner("WATCHED FILMS", fmt.Sprintf("Latest %d entries", len(m.watched))))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	lines = append(lines, renderTableHeader([]string{"Date", "Rating", "Title"}, []int{12, 8, 50}))
 
-	for i, log := range m.watched {
-		if i >= m.height-12 {
-			break
-		}
+	if m.scrollOffset > 0 {
+		lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	for i := m.scrollOffset; i < len(m.watched) && i < m.scrollOffset+visibleHeight; i++ {
+		log := m.watched[i]
 		rating := "─"
 		if log.Rating != nil {
 			rating = fmt.Sprintf("%.1f★", *log.Rating)
@@ -98,6 +107,10 @@ func (m Model) viewWatched() string {
 			row = selectedStyle.Render(row)
 		}
 		lines = append(lines, row)
+	}
+
+	if m.scrollOffset+visibleHeight < len(m.watched) {
+		lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 	}
 
 	view.WriteString(renderCard("WATCHED", fmt.Sprintf("%d films logged", len(m.watched)), lines, accentColor))
@@ -112,19 +125,32 @@ func (m Model) viewRatings() string {
 	view.WriteString(renderBanner("RATINGS DESK", "Top-rated films"))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	lines = append(lines, renderTableHeader([]string{"Score", "Date", "Title"}, []int{8, 12, 50}))
 
-	for i, log := range m.ratings {
-		if i >= m.height-12 {
-			break
-		}
+	if m.scrollOffset > 0 {
+		lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	for i := m.scrollOffset; i < len(m.ratings) && i < m.scrollOffset+visibleHeight; i++ {
+		log := m.ratings[i]
 		score := fmt.Sprintf("%.1f★", *log.Rating)
 		row := renderTableRow([]string{score, log.LocalDate, log.Title}, []int{8, 12, 50})
 		if i == m.selectedIndex {
 			row = selectedStyle.Render(row)
 		}
 		lines = append(lines, row)
+	}
+
+	if m.scrollOffset+visibleHeight < len(m.ratings) {
+		lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 	}
 
 	view.WriteString(renderCard("RATINGS", fmt.Sprintf("%d rated films", len(m.ratings)), lines, warmColor))
@@ -139,13 +165,22 @@ func (m Model) viewReviews() string {
 	view.WriteString(renderBanner("REVIEW NOTES", "Your commentary"))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	lines = append(lines, renderTableHeader([]string{"Date", "Film", "Note Preview"}, []int{12, 26, 32}))
 
-	for i, log := range m.reviews {
-		if i >= m.height-12 {
-			break
-		}
+	if m.scrollOffset > 0 {
+		lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	for i := m.scrollOffset; i < len(m.reviews) && i < m.scrollOffset+visibleHeight; i++ {
+		log := m.reviews[i]
 		notePreview := ""
 		if log.Notes != nil {
 			notePreview = *log.Notes
@@ -158,6 +193,10 @@ func (m Model) viewReviews() string {
 			row = selectedStyle.Render(row)
 		}
 		lines = append(lines, row)
+	}
+
+	if m.scrollOffset+visibleHeight < len(m.reviews) {
+		lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 	}
 
 	view.WriteString(renderCard("REVIEWS", fmt.Sprintf("%d notes recorded", len(m.reviews)), lines, roseColor))
@@ -241,6 +280,11 @@ func (m Model) viewWatchlist() string {
 	view.WriteString(renderBanner("WATCHLIST", "Planned watches"))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	
 	if len(m.watchlist) == 0 {
@@ -252,10 +296,14 @@ func (m Model) viewWatchlist() string {
 	} else {
 		lines = append(lines, renderTableHeader([]string{"Added", "Title / Notes"}, []int{12, 60}))
 
-		for i, item := range m.watchlist {
-			if i >= m.height-12 {
-				break
-			}
+		if m.scrollOffset > 0 {
+			lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+		} else {
+			lines = append(lines, "")
+		}
+
+		for i := m.scrollOffset; i < len(m.watchlist) && i < m.scrollOffset+visibleHeight; i++ {
+			item := m.watchlist[i]
 			note := ""
 			if item.Notes != nil {
 				note = " | " + *item.Notes
@@ -265,6 +313,10 @@ func (m Model) viewWatchlist() string {
 				row = selectedStyle.Render(row)
 			}
 			lines = append(lines, row)
+		}
+
+		if m.scrollOffset+visibleHeight < len(m.watchlist) {
+			lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 		}
 	}
 
@@ -280,6 +332,11 @@ func (m Model) viewLists() string {
 	view.WriteString(renderBanner("COLLECTIONS", "Custom lists"))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	
 	if len(m.lists) == 0 {
@@ -291,15 +348,23 @@ func (m Model) viewLists() string {
 	} else {
 		lines = append(lines, renderTableHeader([]string{"List", "Films"}, []int{60, 8}))
 
-		for i, list := range m.lists {
-			if i >= m.height-12 {
-				break
-			}
+		if m.scrollOffset > 0 {
+			lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+		} else {
+			lines = append(lines, "")
+		}
+
+		for i := m.scrollOffset; i < len(m.lists) && i < m.scrollOffset+visibleHeight; i++ {
+			list := m.lists[i]
 			row := renderTableRow([]string{list.Name, fmt.Sprintf("%d", 0)}, []int{60, 8})
 			if i == m.selectedIndex {
 				row = selectedStyle.Render(row)
 			}
 			lines = append(lines, row)
+		}
+
+		if m.scrollOffset+visibleHeight < len(m.lists) {
+			lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 		}
 	}
 
@@ -315,13 +380,22 @@ func (m Model) viewListItems() string {
 	view.WriteString(renderBanner("COLLECTION: "+strings.ToUpper(m.currentListName), fmt.Sprintf("%d films", len(m.listItems))))
 	view.WriteString("\n\n")
 
+	visibleHeight := m.height - 15
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	lines := make([]string, 0)
 	lines = append(lines, renderTableHeader([]string{"#", "Title", "Notes"}, []int{3, 50, 20}))
 
-	for i, item := range m.listItems {
-		if i >= m.height-12 {
-			break
-		}
+	if m.scrollOffset > 0 {
+		lines = append(lines, dimStyle.Render(centerPad("↑ ... ↑", 70)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	for i := m.scrollOffset; i < len(m.listItems) && i < m.scrollOffset+visibleHeight; i++ {
+		item := m.listItems[i]
 		notes := ""
 		if item.Notes != nil {
 			notes = *item.Notes
@@ -331,6 +405,10 @@ func (m Model) viewListItems() string {
 			row = selectedStyle.Render(row)
 		}
 		lines = append(lines, row)
+	}
+
+	if m.scrollOffset+visibleHeight < len(m.listItems) {
+		lines = append(lines, dimStyle.Render(centerPad("↓ ... ↓", 70)))
 	}
 
 	view.WriteString(renderCard("ITEMS", m.currentListName, lines, warmColor))

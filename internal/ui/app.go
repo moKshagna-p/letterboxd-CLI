@@ -48,6 +48,7 @@ type Model struct {
 	currentListID   string
 	currentListName string
 	selectedIndex   int
+	scrollOffset    int
 	editingLog      *domain.FilmLog
 	editField       string
 	editValue       string
@@ -74,6 +75,7 @@ func New(ctx context.Context, deps *Dependencies) *Model {
 		deps:      deps,
 		currentView: ViewMainMenu,
 		selectedIndex: 0,
+		scrollOffset: 0,
 	}
 }
 
@@ -94,42 +96,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadWatchedMsg:
 		m.watched = msg.logs
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewWatched
 		m.loading = false
 		return m, nil
 	case loadRatingsMsg:
 		m.ratings = msg.logs
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewRatings
 		m.loading = false
 		return m, nil
 	case loadReviewsMsg:
 		m.reviews = msg.logs
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewReviews
 		m.loading = false
 		return m, nil
 	case loadHeatmapMsg:
 		m.heatmap = msg.heatmap
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewHeatmap
 		m.loading = false
 		return m, nil
 	case loadStatsMsg:
 		m.stats = msg.stats
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewStats
 		m.loading = false
 		return m, nil
 	case loadWatchlistMsg:
 		m.watchlist = msg.items
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewWatchlist
 		m.loading = false
 		return m, nil
 	case loadListsMsg:
 		m.lists = msg.lists
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewLists
 		m.loading = false
 		return m, nil
@@ -137,6 +146,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.listItems = msg.items
 		m.currentListName = msg.listName
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		m.currentView = ViewListItems
 		m.loading = false
 		return m, nil
@@ -208,6 +218,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentView != ViewMainMenu {
 			m.currentView = ViewMainMenu
 			m.selectedIndex = 0
+			m.scrollOffset = 0
 			return m, nil
 		}
 		// Quit if already in main menu
@@ -216,6 +227,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
+			if m.selectedIndex < m.scrollOffset {
+				m.scrollOffset = m.selectedIndex
+			}
 		}
 		return m, nil
 
@@ -224,13 +238,23 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		maxIndex := m.getMaxIndex() - 1
 		if m.selectedIndex < maxIndex {
 			m.selectedIndex++
+			// Calculate visible area
+			visibleHeight := m.height - 15 // Roughly the card content area
+			if visibleHeight < 1 {
+				visibleHeight = 1
+			}
+			if m.selectedIndex >= m.scrollOffset+visibleHeight {
+				m.scrollOffset = m.selectedIndex - visibleHeight + 1
+			}
 		}
 		return m, nil
 
 	case "home":
 		m.currentView = ViewMainMenu
 		m.selectedIndex = 0
+		m.scrollOffset = 0
 		return m, nil
+
 
 	// Menu shortcuts
 	case "1":
@@ -398,8 +422,14 @@ func (m Model) loadListItems(listID string, listName string) tea.Cmd {
 
 func (m Model) refreshData() tea.Cmd {
 	return func() tea.Msg {
-		// TODO: Trigger sync
-		return successMsg("Data refreshed")
+		res, err := m.deps.Sync.SyncAndImport(m.ctx)
+		if err != nil {
+			return errorMsg{err}
+		}
+		if res.ImportResult.Imported == 0 && res.WatchlistAdded == 0 {
+			return successMsg("No new data found")
+		}
+		return successMsg(fmt.Sprintf("Imported %d new films", res.ImportResult.Imported))
 	}
 }
 

@@ -76,18 +76,55 @@ func (d *LetterboxdDownloader) DownloadLatestExport(ctx context.Context, creds L
 		return DownloadedExport{}, err
 	}
 
+	fmt.Printf("[Downloader] Scraping diary (watched films)...\n")
 	entries, err := d.scrapeDiary(ctx, client, creds.Username)
 	if err != nil {
+		fmt.Printf("[Downloader] Diary scrape error: %v\n", err)
 		return DownloadedExport{}, err
 	}
 	if len(entries) == 0 {
+		fmt.Printf("[Downloader] No diary entries found\n")
 		return DownloadedExport{}, ErrNoNewExportFound
 	}
+	fmt.Printf("[Downloader] Scraped %d diary entries\n", len(entries))
 
 	out := filepath.Join(outDir, "letterboxd-diary-scrape.csv")
 	if err := writeScrapedDiaryCSV(out, entries); err != nil {
 		return DownloadedExport{}, err
 	}
+	
+	// Also scrape and save watchlist
+	username := strings.TrimSpace(creds.Username)
+	fmt.Printf("[Downloader] Scraping watchlist...\n")
+	watchlist, err := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/watchlist/", username), []string{
+		`data-film-name="([^"]+)"`,
+		`<img[^>]*alt="([^"]+)"[^>]*class="[^"]*image[^"]*"`,
+		`<img[^>]*alt="([^"]+)"[^>]*>`,
+	})
+	if err != nil {
+		fmt.Printf("[Downloader] Watchlist scrape error: %v\n", err)
+	} else if len(watchlist) > 0 {
+		watchlistOut := filepath.Join(outDir, "watchlist-scrape.csv")
+		if err := writeScrapedWatchlistCSV(watchlistOut, watchlist); err != nil {
+			fmt.Printf("[Downloader] Failed to write watchlist CSV: %v\n", err)
+		}
+	}
+	
+	// Also scrape and save lists
+	fmt.Printf("[Downloader] Scraping lists...\n")
+	lists, err := d.scrapeSimpleTitleList(ctx, client, fmt.Sprintf("https://letterboxd.com/%s/lists/", username), []string{
+		`<h2[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*>(.*?)</a>`,
+		`<a[^>]*href="/%s/list/[^"]+"[^>]*>(.*?)</a>`,
+	})
+	if err != nil {
+		fmt.Printf("[Downloader] Lists scrape error: %v\n", err)
+	} else if len(lists) > 0 {
+		listsOut := filepath.Join(outDir, "lists-scrape.csv")
+		if err := writeScrapedListsCSV(listsOut, lists); err != nil {
+			fmt.Printf("[Downloader] Failed to write lists CSV: %v\n", err)
+		}
+	}
+	
 	return DownloadedExport{ImportPath: out, SourcePath: ""}, nil
 }
 
@@ -451,6 +488,68 @@ func writeScrapedDiaryCSV(path string, rows []scrapedDiaryEntry) error {
 	return nil
 }
 
+func writeScrapedWatchlistCSV(path string, titles []string) error {
+	fmt.Printf("[Scraper] Writing %d watchlist items to CSV: %s\n", len(titles), path)
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("[Scraper] Failed to create watchlist CSV file: %v\n", err)
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{"Name"}); err != nil {
+		fmt.Printf("[Scraper] Failed to write watchlist CSV header: %v\n", err)
+		return err
+	}
+	for _, title := range titles {
+		if title == "" {
+			continue
+		}
+		if err := w.Write([]string{title}); err != nil {
+			fmt.Printf("[Scraper] Failed to write watchlist row: %v\n", err)
+			return err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		fmt.Printf("[Scraper] Watchlist CSV writer error: %v\n", err)
+		return err
+	}
+	fmt.Printf("[Scraper] Successfully wrote %d watchlist items to CSV\n", len(titles))
+	return nil
+}
+
+func writeScrapedListsCSV(path string, lists []string) error {
+	fmt.Printf("[Scraper] Writing %d list names to CSV: %s\n", len(lists), path)
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("[Scraper] Failed to create lists CSV file: %v\n", err)
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{"Name"}); err != nil {
+		fmt.Printf("[Scraper] Failed to write lists CSV header: %v\n", err)
+		return err
+	}
+	for _, listName := range lists {
+		if listName == "" {
+			continue
+		}
+		if err := w.Write([]string{listName}); err != nil {
+			fmt.Printf("[Scraper] Failed to write lists row: %v\n", err)
+			return err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		fmt.Printf("[Scraper] Lists CSV writer error: %v\n", err)
+		return err
+	}
+	fmt.Printf("[Scraper] Successfully wrote %d lists to CSV\n", len(lists))
+	return nil
+}
+
 func parseLoginForm(page string) (string, string, string, url.Values) {
 	formRe := regexp.MustCompile(`(?is)<form[^>]*action="([^"]*login[^"]*)"[^>]*>(.*?)</form>`)
 	match := formRe.FindStringSubmatch(page)
@@ -516,58 +615,109 @@ func parseLoginForm(page string) (string, string, string, url.Values) {
 func parseDiaryEntriesFromHTML(page string) []scrapedDiaryEntry {
 	rowRe := regexp.MustCompile(`(?is)<tr[^>]*diary-entry-row[^>]*>(.*?)</tr>`)
 	titleRe := regexp.MustCompile(`(?is)<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
-	dateAttrRe := regexp.MustCompile(`\bdata-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"`)
-	yearAttrRe := regexp.MustCompile(`\bdata-film-release-year="([0-9]{4})"`)
-	dayRe := regexp.MustCompile(`(?is)<td[^>]*td-day[^>]*>\s*<a[^>]*>\s*([0-9]{1,2})\s*</a>`)
-	monthRe := regexp.MustCompile(`(?is)<td[^>]*td-month[^>]*>\s*<small[^>]*>\s*([A-Za-z]{3})\s*</small>`)
-	yearRe := regexp.MustCompile(`(?is)<td[^>]*td-year[^>]*>\s*<a[^>]*>\s*([0-9]{4})\s*</a>`)
-	ratingRe := regexp.MustCompile(`(?is)<td[^>]*td-rating[^>]*>\s*([^<]+)\s*</td>`)
+	// Extract date from links like /username/diary/films/for/2026/04/19/
+	dateLinkRe := regexp.MustCompile(`(?is)/diary/films/for/([0-9]{4})/([0-9]{2})/([0-9]{2})/`)
+	
 	out := make([]scrapedDiaryEntry, 0, 128)
 
 	rows := rowRe.FindAllStringSubmatch(page, -1)
 	fmt.Printf("[Scraper] HTML: found %d diary-entry-row matches\n", len(rows))
 	for _, row := range rows {
+		fullMatch := row[0]
 		block := row[1]
-		tm := titleRe.FindStringSubmatch(block)
-		if len(tm) < 3 {
-			continue
+		
+		// 1. Try to find title and film path
+		title := ""
+		filmPath := ""
+		if tm := titleRe.FindStringSubmatch(block); len(tm) >= 3 {
+			filmPath = strings.TrimSpace(tm[1])
+			title = strings.TrimSpace(stripHTML(tm[2]))
 		}
-		title := strings.TrimSpace(stripHTML(tm[2]))
+		
 		if title == "" {
-			continue
+			if m := regexp.MustCompile(`data-film-name="([^"]+)"`).FindStringSubmatch(fullMatch); len(m) >= 2 {
+				title = html.UnescapeString(m[1])
+			}
 		}
-
-		date := ""
-		if dm := dateAttrRe.FindStringSubmatch(block); len(dm) >= 2 {
-			date = dm[1]
-		}
-		if date == "" {
-			dayM := dayRe.FindStringSubmatch(block)
-			monthM := monthRe.FindStringSubmatch(block)
-			yearM := yearRe.FindStringSubmatch(block)
-			if len(dayM) >= 2 && len(monthM) >= 2 && len(yearM) >= 2 {
-				if d, err := strconv.Atoi(dayM[1]); err == nil {
-					if m, ok := monthFromShortName(monthM[1]); ok {
-						date = fmt.Sprintf("%s-%02d-%02d", yearM[1], int(m), d)
-					}
+		
+		if title == "" {
+			if m := regexp.MustCompile(`alt="([^"]+)"`).FindStringSubmatch(block); len(m) >= 2 {
+				t := html.UnescapeString(m[1])
+				if !strings.EqualFold(t, "poster") && t != "" {
+					title = t
 				}
 			}
 		}
 
-		year := ""
-		if ym := yearAttrRe.FindStringSubmatch(block); len(ym) >= 2 {
-			year = ym[1]
+		if title == "" {
+			continue
 		}
+
+		// 2. Try to find date
+		date := ""
+		if m := dateLinkRe.FindStringSubmatch(fullMatch); len(m) >= 4 {
+			date = fmt.Sprintf("%s-%s-%s", m[1], m[2], m[3])
+		}
+		
+		if date == "" {
+			if m := regexp.MustCompile(`data-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"`).FindStringSubmatch(fullMatch); len(m) >= 2 {
+				date = m[1]
+			}
+		}
+		
+		if date == "" {
+			// Fallback: search for ANY YYYY-MM-DD pattern
+			re := regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}`)
+			if m := re.FindString(fullMatch); m != "" {
+				date = m
+			}
+		}
+
+		if date == "" {
+			continue // Still no date, skip
+		}
+
+		// 3. Extract rating
 		rating := ""
-		if rm := ratingRe.FindStringSubmatch(block); len(rm) >= 2 {
-			rating = strings.TrimSpace(stripHTML(rm[1]))
+		// Look for "rated-X" class where X is 1-10 (0.5 to 5.0 stars)
+		if m := regexp.MustCompile(`rated-([0-9]{1,2})`).FindStringSubmatch(block); len(m) >= 2 {
+			val, _ := strconv.Atoi(m[1])
+			if val > 0 {
+				rating = fmt.Sprintf("%.1f", float64(val)/2.0)
+			}
 		}
-		rewatch := strings.Contains(strings.ToLower(block), "icon-rewatch") || strings.Contains(strings.ToLower(block), "td-rewatch")
+		
+		if rating == "" {
+			// Try the input range value
+			if m := regexp.MustCompile(`value="([0-9]+)"`).FindStringSubmatch(block); len(m) >= 2 {
+				val, _ := strconv.Atoi(m[1])
+				if val > 0 {
+					rating = fmt.Sprintf("%.1f", float64(val)/2.0)
+				}
+			}
+		}
+
+		// 4. Extract rewatch
+		rewatch := strings.Contains(strings.ToLower(block), "icon-rewatch") || 
+			strings.Contains(strings.ToLower(block), "td-rewatch") ||
+			strings.Contains(strings.ToLower(block), "icon-status-on") && strings.Contains(strings.ToLower(block), "rewatch")
+
+		// 5. Extract film release year if possible
+		year := ""
+		if m := regexp.MustCompile(`data-film-release-year="([0-9]{4})"`).FindStringSubmatch(fullMatch); len(m) >= 2 {
+			year = m[1]
+		}
+		if year == "" {
+			if m := regexp.MustCompile(`class="releasedate".*?>([0-9]{4})</a>`).FindStringSubmatch(block); len(m) >= 2 {
+				year = m[1]
+			}
+		}
+
 		out = append(out, scrapedDiaryEntry{
 			Date:     date,
 			Title:    title,
 			Year:     year,
-			FilmPath: strings.TrimSpace(tm[1]),
+			FilmPath: filmPath,
 			Rating:   rating,
 			Rewatch:  rewatch,
 		})
@@ -578,10 +728,10 @@ func parseDiaryEntriesFromHTML(page string) []scrapedDiaryEntry {
 		return out
 	}
 
-	fmt.Printf("[Scraper] HTML: diary-entry-row failed, trying data-film-name fallback\n")
+	fmt.Printf("[Scraper] HTML: diary-entry-row failed to yield entries, trying data-film-name global fallback\n")
 	dataCardRe := regexp.MustCompile(`(?is)<[^>]*data-film-name="([^"]+)"[^>]*data-viewing-date-str="([0-9]{4}-[0-9]{2}-[0-9]{2})"[^>]*>`)
 	dataMatches := dataCardRe.FindAllStringSubmatch(page, -1)
-	fmt.Printf("[Scraper] HTML: found %d data-film-name matches\n", len(dataMatches))
+	fmt.Printf("[Scraper] HTML: found %d global data-film-name matches\n", len(dataMatches))
 	for _, m := range dataMatches {
 		if len(m) < 3 {
 			continue

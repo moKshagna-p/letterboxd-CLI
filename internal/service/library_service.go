@@ -66,6 +66,35 @@ func (s *LibraryService) ListLists(ctx context.Context) ([]domain.FilmList, erro
 	return s.store.ListFilmLists(ctx)
 }
 
+func (s *LibraryService) SyncListNames(ctx context.Context, names []string) (int, error) {
+	existing, err := s.store.ListFilmLists(ctx)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]struct{}{}
+	for _, list := range existing {
+		k := strings.ToLower(strings.TrimSpace(list.Name))
+		if k != "" {
+			seen[k] = struct{}{}
+		}
+	}
+	added := 0
+	for _, name := range names {
+		k := strings.ToLower(strings.TrimSpace(name))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		_, err := s.store.AddFilmList(ctx, domain.AddFilmListInput{Name: name})
+		if err == nil {
+			added++
+		}
+	}
+	return added, nil
+}
+
 func (s *LibraryService) AddListItem(ctx context.Context, input domain.AddFilmListItemInput) (domain.FilmListItem, error) {
 	return s.store.AddFilmListItem(ctx, input)
 }

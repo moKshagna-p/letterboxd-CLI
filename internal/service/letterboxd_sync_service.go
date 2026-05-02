@@ -49,6 +49,7 @@ type SyncImportResult struct {
 	ImportResult   CSVImportResult
 	ExportHash     string
 	WatchlistAdded int
+	ListsAdded     int
 }
 
 func NewLetterboxdSyncService(csvSvc *CSVService, lib *LibraryService, config *AppConfigService, dl LetterboxdExportDownloader) *LetterboxdSyncService {
@@ -248,13 +249,14 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 
 	hash, err := fileSHA256(dlRes.ImportPath)
 	if err != nil {
+		fmt.Printf("[Sync] Error calculating hash: %v\n", err)
 		return SyncImportResult{}, err
 	}
 	hashShort := hash
 	if len(hash) > 16 {
 		hashShort = hash[:16]
 	}
-	fmt.Printf("[Sync] Export hash: %s\n", hashShort)
+	fmt.Printf("[Sync] Export hash: %s (file: %s)\n", hashShort, dlRes.ImportPath)
 	cfg, err = s.config.Load()
 	if err != nil {
 		return SyncImportResult{}, err
@@ -272,7 +274,8 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 		}
 		_ = removeSourceZip(dlRes.SourcePath)
 		watchAdded, _ := s.syncWatchlist(ctx, dlRes.ImportPath, strings.TrimSpace(cfg.LetterboxdUsername))
-		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash, WatchlistAdded: watchAdded}, nil
+		listsAdded, _ := s.syncLists(ctx, dlRes.ImportPath)
+		return SyncImportResult{ImportResult: CSVImportResult{}, ExportHash: hash, WatchlistAdded: watchAdded, ListsAdded: listsAdded}, nil
 	}
 
 	fmt.Printf("[Sync] ✗ New data detected - importing CSV from: %s\n", dlRes.ImportPath)
@@ -290,8 +293,9 @@ func (s *LetterboxdSyncService) syncAndImport(ctx context.Context, ignoreCooldow
 		return SyncImportResult{}, err
 	}
 	watchAdded, _ := s.syncWatchlist(ctx, dlRes.ImportPath, strings.TrimSpace(cfg.LetterboxdUsername))
+	listsAdded, _ := s.syncLists(ctx, dlRes.ImportPath)
 	_ = removeSourceZip(dlRes.SourcePath)
-	return SyncImportResult{ImportResult: res, ExportHash: hash, WatchlistAdded: watchAdded}, nil
+	return SyncImportResult{ImportResult: res, ExportHash: hash, WatchlistAdded: watchAdded, ListsAdded: listsAdded}, nil
 }
 
 func fileSHA256(path string) (string, error) {
@@ -336,6 +340,17 @@ func (s *LetterboxdSyncService) syncWatchlist(ctx context.Context, zipPath strin
 		titles, err = parseWatchlistFromExportZip(zipPath)
 		if err != nil {
 			return 0, err
+		}
+	} else {
+		// Try to find watchlist-scrape.csv in the same directory
+		dir := filepath.Dir(zipPath)
+		watchlistPath := filepath.Join(dir, "watchlist-scrape.csv")
+		if _, err := os.Stat(watchlistPath); err == nil {
+			f, err := os.Open(watchlistPath)
+			if err == nil {
+				defer f.Close()
+				titles, _ = parseWatchlistCSV(f)
+			}
 		}
 	}
 	if len(titles) == 0 && username != "" {
@@ -447,6 +462,93 @@ func scrapeLetterboxdWatchlist(username string) ([]string, error) {
 		}
 	}
 	return uniqueTitles(out), nil
+}
+
+func (s *LetterboxdSyncService) syncLists(ctx context.Context, zipPath string) (int, error) {
+	if s.lib == nil {
+		return 0, nil
+	}
+	var names []string
+	var err error
+	if strings.EqualFold(filepath.Ext(zipPath), ".zip") {
+		names, err = parseListsFromExportZip(zipPath)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		// Try to find lists-scrape.csv in the same directory
+		dir := filepath.Dir(zipPath)
+		listsPath := filepath.Join(dir, "lists-scrape.csv")
+		if _, err := os.Stat(listsPath); err == nil {
+			f, err := os.Open(listsPath)
+			if err == nil {
+				defer f.Close()
+				names, _ = parseListsCSV(f)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	return s.lib.SyncListNames(ctx, names)
+}
+
+func parseListsFromExportZip(zipPath string) ([]string, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		name := strings.ToLower(filepath.Base(f.Name))
+		if name != "lists.csv" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		return parseListsCSV(rc)
+	}
+	return nil, nil
+}
+
+func parseListsCSV(r io.Reader) ([]string, error) {
+	cr := csv.NewReader(r)
+	head, err := cr.Read()
+	if err != nil {
+		return nil, err
+	}
+	idx := -1
+	for i, h := range head {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "name" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, nil
+	}
+	var names []string
+	for {
+		row, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if idx >= len(row) {
+			continue
+		}
+		name := strings.TrimSpace(row[idx])
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return uniqueTitles(names), nil
 }
 
 func uniqueTitles(in []string) []string {
