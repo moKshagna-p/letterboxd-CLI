@@ -40,6 +40,7 @@ checksum:
 
 brews:
   - name: letterboxd-tui
+    directory: Formula
     repository:
       owner: moKshagna-p
       name: homebrew-tap
